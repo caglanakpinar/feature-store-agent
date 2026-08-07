@@ -1,0 +1,731 @@
+
+llms:
+  generator_llm_1:  # the workhorse behind the specialists
+    model: "claude/claude-sonnet-5"
+    api_key: CLAUDE
+    max_tokens: 16000
+    type: "generator"
+
+  generator_llm_2:  # for the short structured answers — still needs room to think first
+    model: "claude/claude-sonnet-5"
+    api_key: CLAUDE
+    max_tokens: 8000
+    type: "generator"
+
+  generator_llm_thinker:  # every agent's fallback when its primary call fails
+    model: "claude/claude-sonnet-5"
+    api_key: CLAUDE
+    max_tokens: 16000
+    type: "generator"
+
+  judger_agent_1:  # the review comes from a stronger model than the work it is reviewing
+    model: "claude/claude-opus-5"
+    api_key: CLAUDE
+    max_tokens: 16000
+    type: "judger"
+
+
+dbs:
+  # The knowledge base the problem thinker retrieves from once `rag_problem_thinker_agent.type` is
+  # switched to "rag". `dimension` must match the width of the embeddings model below.
+  - name: "ds_knowledge_db"
+    type: "vector"
+    db: "faiss"
+    path: "benchmarks/artifacts/ds_knowledge.index"
+    dimension: 3072
+    metric: "cosine"
+
+  # The knowledge base the problem thinker retrieves from once `rag_problem_thinker_agent.type` is
+  # switched to "rag". `dimension` must match the width of the embeddings model below.
+  - name: "ds_feature_knowledge_db"
+    type: "vector"
+    db: "faiss"
+    path: "benchmarks/artifacts/ds_knowledge.index"
+    dimension: 3072
+    metric: "cosine"
+
+
+embeddings:
+  rag_embeddings:
+    model: "google/gemini-embedding-001"
+    api_key: GEMINI
+
+
+tools:
+  # ---- data ---------------------------------------------------------------------------------------
+  - name: "data_reader_tool"
+    description: "Profile a dataset: row and column counts, column kinds, missing values, target balance, and sample rows."
+    caller: "benchmarks.tools.data_reader_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the CSV. Defaults to the churn training set."
+        required: false
+      - name: "limit"
+        type: "int"
+        description: "How many sample rows to return."
+        required: false
+      - name: "columns"
+        type: "list"
+        description: "Restrict the profile to these columns."
+        required: false
+
+  - name: "data_ingestion_tool"
+    description: "Read a dataset in and apply preprocessing steps: strip_whitespace, drop_duplicates, drop_missing_target, coerce_numeric."
+    caller: "benchmarks.tools.data_ingestion_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "The source of the data to be ingested."
+        required: false
+      - name: "preprocessing_steps"
+        type: "list"
+        description: "Steps to apply while ingesting."
+        required: false
+
+  - name: "data_cleaning_tool"
+    description: "Impute missing values, clip outliers and drop duplicate rows, reporting every change made."
+    caller: "benchmarks.tools.data_cleaning_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the CSV to clean."
+        required: false
+      - name: "missing_strategy"
+        type: "str"
+        description: "How to fill missing numeric values."
+        enum: ["median", "mean", "drop"]
+        required: false
+      - name: "drop_duplicates"
+        type: "bool"
+        description: "Remove rows that repeat verbatim."
+        required: false
+      - name: "outlier_method"
+        type: "str"
+        description: "How to treat outliers: clip beyond 1.5x IQR, or leave them."
+        enum: ["iqr", "none"]
+        required: false
+      - name: "output_path"
+        type: "str"
+        description: "Where to write the cleaned dataset."
+        required: false
+
+  - name: "data_transformation_tool"
+    description: "Transform columns with log, sqrt, zscore or bucket, adding the result as a new column."
+    caller: "benchmarks.tools.data_transformation_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the CSV to transform."
+        required: false
+      - name: "transformations"
+        type: "list"
+        description: "List of {column, operation} mappings."
+        required: false
+      - name: "output_path"
+        type: "str"
+        description: "Where to write the transformed dataset."
+        required: false
+
+  - name: "data_validation_tool"
+    description: "Check a dataset is fit to train on — target present, binary and balanced enough, ids unique, missingness under a ceiling — returning one pass/fail per check."
+    caller: "benchmarks.tools.data_validation_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the CSV to validate."
+        required: false
+      - name: "target"
+        type: "str"
+        description: "The column being predicted."
+        required: false
+      - name: "expectations"
+        type: "dict"
+        description: "Overrides: min_rows, max_missing_rate, min_positive_rate."
+        required: false
+
+  # ---- features -----------------------------------------------------------------------------------
+  - name: "feature_engineering_tool"
+    description: "Derive domain features (charges_per_month, tickets_per_year, engagement_index, revenue_per_product, is_month_to_month, pays_by_echeck, tenure_bucket) and optionally transform them."
+    caller: "benchmarks.tools.feature_engineering_caller"
+    args:
+      - name: "feature_list"
+        type: "list"
+        description: "Which derived features to build."
+        required: false
+      - name: "transformation_steps"
+        type: "list"
+        description: "Transformations to apply to what was derived."
+        required: false
+      - name: "data_source"
+        type: "str"
+        description: "Path to the CSV to build features from."
+        required: false
+
+  - name: "feature_generator_tool"
+    description: "Search numeric column pairs for ratio features that correlate with the target better than their parents do, keeping the strongest."
+    caller: "benchmarks.tools.feature_generator_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the CSV to generate features from."
+        required: false
+      - name: "max_features"
+        type: "int"
+        description: "How many generated features to keep."
+        required: false
+
+  - name: "feature_extraction_tool"
+    description: "Build composite features that summarise several columns at once: value_score, friction_score, commitment_score."
+    caller: "benchmarks.tools.feature_extraction_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the CSV to extract from."
+        required: false
+      - name: "aggregations"
+        type: "list"
+        description: "Which composites to build."
+        required: false
+
+  - name: "feature_encoding_tool"
+    description: "Encode categorical columns as numbers, one-hot or ordinal."
+    caller: "benchmarks.tools.feature_encoding_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the CSV to encode."
+        required: false
+      - name: "columns"
+        type: "list"
+        description: "Columns to encode. Defaults to every categorical column."
+        required: false
+      - name: "method"
+        type: "str"
+        description: "Encoding to apply."
+        enum: ["one_hot", "ordinal"]
+        required: false
+
+  - name: "feature_scaling_tool"
+    description: "Scale numeric columns to zero mean and unit variance, or to a 0..1 range."
+    caller: "benchmarks.tools.feature_scaling_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the CSV to scale."
+        required: false
+      - name: "columns"
+        type: "list"
+        description: "Columns to scale. Defaults to every numeric column."
+        required: false
+      - name: "method"
+        type: "str"
+        description: "Scaling to apply."
+        enum: ["standard", "minmax"]
+        required: false
+
+  - name: "feature_selection_tool"
+    description: "Rank features by how much they tell you about the target, by correlation or mutual information, and return the strongest."
+    caller: "benchmarks.tools.feature_selection_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the CSV to rank features in."
+        required: false
+      - name: "target"
+        type: "str"
+        description: "The column being predicted."
+        required: false
+      - name: "top_k"
+        type: "int"
+        description: "How many features to select."
+        required: false
+      - name: "method"
+        type: "str"
+        description: "Ranking criterion."
+        enum: ["correlation", "mutual_information"]
+        required: false
+
+  # ---- models -------------------------------------------------------------------------------------
+  - name: "classification_tool"
+    description: "Train the binary classifier — a class-weighted logistic regression — and save it for scoring. Returns training metrics and the strongest coefficients."
+    caller: "benchmarks.tools.classification_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the training CSV."
+        required: false
+      - name: "target"
+        type: "str"
+        description: "The column being predicted."
+        required: false
+      - name: "hyperparameters"
+        type: "dict"
+        description: "learning_rate, epochs, l2, class_weight, threshold."
+        required: false
+      - name: "model_path"
+        type: "str"
+        description: "Where to save the fitted model."
+        required: false
+
+  - name: "regression_tool"
+    description: "Fit a linear regression on a continuous target, reporting RMSE, MAE and R-squared."
+    caller: "benchmarks.tools.regression_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the training CSV."
+        required: false
+      - name: "target"
+        type: "str"
+        description: "The continuous column to predict."
+        required: false
+      - name: "hyperparameters"
+        type: "dict"
+        description: "learning_rate, epochs, l2."
+        required: false
+
+  - name: "ranking_tool"
+    description: "Rank customers by predicted churn risk and report precision, capture rate and lift over random targeting at a given depth."
+    caller: "benchmarks.tools.ranking_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the CSV to score and rank."
+        required: false
+      - name: "model_path"
+        type: "str"
+        description: "Path to the saved model to score with."
+        required: false
+      - name: "top_k"
+        type: "int"
+        description: "How deep the targeting list goes."
+        required: false
+
+  - name: "clustering_tool"
+    description: "Segment customers with k-means and report the churn rate and distinguishing features of each segment."
+    caller: "benchmarks.tools.clustering_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the CSV to cluster."
+        required: false
+      - name: "n_clusters"
+        type: "int"
+        description: "How many segments to build."
+        required: false
+      - name: "iterations"
+        type: "int"
+        description: "Maximum k-means iterations."
+        required: false
+
+  - name: "dimensionality_reduction_tool"
+    description: "Run PCA over the feature space and report the variance each component explains and the features loading onto it."
+    caller: "benchmarks.tools.dimensionality_reduction_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the CSV to reduce."
+        required: false
+      - name: "n_components"
+        type: "int"
+        description: "How many components to extract."
+        required: false
+
+  - name: "neural_network_tool"
+    description: "Train a one-hidden-layer neural network on the same problem, as the non-linear comparison against the logistic regression."
+    caller: "benchmarks.tools.neural_network_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the training CSV."
+        required: false
+      - name: "target"
+        type: "str"
+        description: "The column being predicted."
+        required: false
+      - name: "hidden_units"
+        type: "int"
+        description: "Width of the hidden layer."
+        required: false
+      - name: "epochs"
+        type: "int"
+        description: "Training epochs."
+        required: false
+      - name: "learning_rate"
+        type: "float"
+        description: "SGD learning rate."
+        required: false
+
+  - name: "hyperparameter_tuning_tool"
+    description: "Grid-search the classifier's hyperparameters by cross-validated ROC AUC, returning every combination's score, not only the winner."
+    caller: "benchmarks.tools.hyperparameter_tuning_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the training CSV."
+        required: false
+      - name: "target"
+        type: "str"
+        description: "The column being predicted."
+        required: false
+      - name: "grid"
+        type: "dict"
+        description: "Values to search: learning_rate, l2, epochs."
+        required: false
+      - name: "folds"
+        type: "int"
+        description: "Cross-validation folds per combination."
+        required: false
+
+  - name: "model_development_tool"
+    description: "Develop a model of the requested kind, dispatching to the tool that trains it."
+    caller: "benchmarks.tools.model_development_caller"
+    args:
+      - name: "model_type"
+        type: "str"
+        description: "The type of model to be developed."
+        enum: ["classification", "regression", "neural_network", "clustering"]
+        required: false
+      - name: "hyperparameters"
+        type: "dict"
+        description: "Dictionary of hyperparameters for the model."
+        required: false
+      - name: "data_source"
+        type: "str"
+        description: "Path to the training CSV."
+        required: false
+
+  # ---- evaluation, operations, benchmarking -------------------------------------------------------
+  - name: "model_evaluation_tool"
+    description: "Score a saved model on held-out data and return the full metric set with its confusion matrix and the majority-class baseline."
+    caller: "benchmarks.tools.model_evaluation_caller"
+    args:
+      - name: "model_path"
+        type: "str"
+        description: "Path to the saved model."
+        required: false
+      - name: "data_source"
+        type: "str"
+        description: "Path to the evaluation CSV. Defaults to the holdout set."
+        required: false
+      - name: "threshold"
+        type: "float"
+        description: "Decision threshold to score at."
+        required: false
+
+  - name: "performance_metrics_tool"
+    description: "Sweep the decision threshold and report the metrics at each one, with the threshold that maximises F1."
+    caller: "benchmarks.tools.performance_metrics_caller"
+    args:
+      - name: "model_path"
+        type: "str"
+        description: "Path to the saved model."
+        required: false
+      - name: "data_source"
+        type: "str"
+        description: "Path to the evaluation CSV."
+        required: false
+      - name: "metrics"
+        type: "list"
+        description: "Which metrics to report at each threshold."
+        required: false
+
+  - name: "cross_validation_tool"
+    description: "Run stratified k-fold cross-validation and return the score per fold plus its spread — the number a single split can flatter."
+    caller: "benchmarks.tools.cross_validation_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the training CSV."
+        required: false
+      - name: "target"
+        type: "str"
+        description: "The column being predicted."
+        required: false
+      - name: "folds"
+        type: "int"
+        description: "Number of folds."
+        required: false
+      - name: "hyperparameters"
+        type: "dict"
+        description: "Hyperparameters to validate."
+        required: false
+
+  - name: "mlops_integration_tool"
+    description: "Write the deployment manifest for a trained model: serving contract, monitoring plan and rollback criteria."
+    caller: "benchmarks.tools.mlops_integration_caller"
+    args:
+      - name: "deployment_environment"
+        type: "str"
+        description: "The environment where the model will be deployed (e.g., cloud, on-premise)."
+        required: false
+      - name: "monitoring_metrics"
+        type: "list"
+        description: "List of metrics to monitor the model's performance in production."
+        required: false
+      - name: "model_path"
+        type: "str"
+        description: "Path to the model being deployed."
+        required: false
+
+  - name: "benchmarking_tool"
+    description: "Compare the trained model against the baselines it has to beat: the majority class, and the single-rule heuristic a business already has."
+    caller: "benchmarks.tools.benchmarking_caller"
+    args:
+      - name: "benchmark_dataset"
+        type: "str"
+        description: "The dataset against which the model will be benchmarked."
+        required: false
+      - name: "performance_metrics"
+        type: "list"
+        description: "List of performance metrics to compare on."
+        required: false
+      - name: "model_path"
+        type: "str"
+        description: "Path to the model being benchmarked."
+        required: false
+
+
+agents:
+  rag_problem_thinker_agent:  # starts the run — no dependency_agent
+    type: "thinker"  # switch to "rag" to retrieve from ds_knowledge_db before answering
+    db_vector: "ds_knowledge_db"
+    llm: "rag_llm"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "benchmarks/prompts/rag_problem_thinker_prompt.md"
+
+  problem_classier_agent:
+    type: "classifier"
+    dependency_agent: "rag_problem_thinker_agent"
+    llm: "generator_llm_2"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "benchmarks/prompts/problem_classier_prompt.md"
+
+  data_engineer:
+    type: "generator"
+    dependency_agent: "rag_problem_thinker_agent"
+    llm: "generator_llm_1"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "benchmarks/prompts/data_engineer_prompt.md"
+    tools:
+      - "data_reader_tool"
+      - "data_validation_tool"
+      - "data_ingestion_tool"
+      - "data_cleaning_tool"
+      - "data_transformation_tool"
+
+  feature_preprocessing:
+    type: "generator"
+    dependency_agent:
+      - "rag_problem_thinker_agent"
+      - "data_engineer"
+    llm: "generator_llm_1"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "benchmarks/prompts/feature_preprocessing_prompt.md"
+    tools:
+      - "feature_engineering_tool"
+      - "feature_generator_tool"
+      - "feature_extraction_tool"
+      - "feature_encoding_tool"
+      - "feature_scaling_tool"
+      - "feature_selection_tool"
+      - "data_cleaning_tool"
+      - "data_reader_tool"
+
+  model_developer:
+    type: "generator"
+    dependency_agent:
+      - "rag_problem_thinker_agent"
+      - "problem_classier_agent"
+      - "feature_preprocessing"
+    llm: "generator_llm_1"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "benchmarks/prompts/model_developer_prompt.md"
+    tools:
+      - "classification_tool"
+      - "neural_network_tool"
+      - "regression_tool"
+      - "ranking_tool"
+      - "clustering_tool"
+      - "dimensionality_reduction_tool"
+      - "hyperparameter_tuning_tool"
+      - "cross_validation_tool"  # its prompt asks for the cross-validated score, so it needs the tool
+      - "model_development_tool"
+      - "data_reader_tool"
+
+  evaluator:
+    type: "generator"
+    dependency_agent:
+      - "rag_problem_thinker_agent"
+      - "model_developer"
+    llm: "generator_llm_1"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "benchmarks/prompts/evaluator_prompt.md"
+    tools:
+      - "model_evaluation_tool"
+      - "performance_metrics_tool"
+      - "cross_validation_tool"
+      - "data_reader_tool"
+
+  mlops:
+    type: "generator"
+    dependency_agent:
+      - "model_developer"
+      - "evaluator"
+    llm: "generator_llm_1"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "benchmarks/prompts/mlops_prompt.md"
+    tools:
+      - "mlops_integration_tool"
+      - "model_evaluation_tool"
+
+  benchmark:
+    type: "generator"
+    dependency_agent:
+      - "model_developer"
+      - "evaluator"
+    llm: "generator_llm_1"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "benchmarks/prompts/benchmark_prompt.md"
+    tools:
+      - "benchmarking_tool"
+      - "ranking_tool"
+      - "model_evaluation_tool"
+      - "performance_metrics_tool"
+
+  # ---- judges -------------------------------------------------------------------------------------
+  # One judge per stage, each holding that stage to numeric bars. A `min_`/`max_` prefix carries the
+  # direction, and the stem names the measurement `run_benchmark.py` computes from the tools — so every
+  # bar below is evaluated twice: the judge argues about it, and the runner does the arithmetic.
+  problem_judger:
+    type: "judger"
+    dependency_agent:
+      - "rag_problem_thinker_agent"
+      - "problem_classier_agent"
+    llm: "judger_agent_1"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "benchmarks/prompts/problem_judger_prompt.md"
+    thresholds:
+      min_rows: 1000            # too small to train on below this
+      min_positive_rate: 0.02   # a positive class rarer than this is an anomaly-detection problem
+      max_positive_rate: 0.50   # above this the "positive" class is the majority
+      max_missing_rate: 0.10    # no column may be missing more than a tenth of its values
+
+  data_judger:
+    type: "judger"
+    dependency_agent:
+      - "data_engineer"
+      - "feature_preprocessing"
+    llm: "judger_agent_1"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "benchmarks/prompts/data_judger_prompt.md"
+    thresholds:
+      max_duplicate_rows: 0            # duplicates must be gone, not merely counted
+      min_rows_after_cleaning: 2000    # cleaning must not throw the dataset away
+      min_feature_correlation: 0.10    # the strongest feature must carry real signal
+
+  model_judger:
+    type: "judger"
+    dependency_agent:
+      - "rag_problem_thinker_agent"
+      - "model_developer"
+      - "evaluator"
+    llm: "judger_agent_1"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "benchmarks/prompts/model_judger_prompt.md"
+    thresholds:
+      min_cv_roc_auc: 0.70              # cross-validated, never the training score
+      max_cv_spread: 0.05               # a wide spread across folds means the score was luck
+      max_train_holdout_auc_gap: 0.05   # a large gap is overfitting
+      min_holdout_f1: 0.45
+
+  delivery_judger:
+    type: "judger"
+    dependency_agent:
+      - "evaluator"
+      - "mlops"
+      - "benchmark"
+    llm: "judger_agent_1"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "benchmarks/prompts/delivery_judger_prompt.md"
+    thresholds:
+      min_lift_at_50: 2.0                # the weekly call list must beat calling at random
+      min_precision_at_50: 0.40          # under this the team wastes more calls than it saves
+      min_f1_gain_over_baseline: 0.03    # must beat the month-to-month rule the business already has
+
+  judger_agent_1:  # the final arbiter — reviews the whole run, including the other judges' verdicts
+    type: "judger"
+    dependency_agent:  # the whole run: the work, then every gate on it
+      - "rag_problem_thinker_agent"
+      - "problem_classier_agent"
+      - "model_developer"
+      - "evaluator"
+      - "problem_judger"
+      - "data_judger"
+      - "model_judger"
+      - "delivery_judger"
+    llm: "judger_agent_1"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "benchmarks/prompts/judger_prompt.md"
+    thresholds:
+      max_failed_gates: 0   # every stage gate above must have passed
+
+
+orchestrators:
+  # The sub-agents in each stage run in this order — every output is available to the next by name.
+  ds_data_prep_workflow:
+    sub_agents:
+      - "data_engineer"
+      - "feature_preprocessing"
+
+  ds_modelling_workflow:
+    sub_agents:
+      - "model_developer"
+      - "evaluator"
+
+  ds_delivery_workflow:
+    sub_agents:
+      - "mlops"
+      - "benchmark"
+
+
+pipeline:
+  - name: "data_science_workflow"
+    loops: 1
+    description: "Define the problem, classify it, then run the data science workflow over the churn dataset, gating each stage on a judge."
+    steps:
+      - name: "problems_statement"
+        processor:
+          type: "agent"
+          name: "rag_problem_thinker_agent"
+        next_step:
+          type: "agent"
+          name: "problem_classier_agent"
+        needs_judger:
+          - "problem_judger"
+      - name: "data_preparation"
+        processor:
+          type: "orchestrator"
+          name: "ds_data_prep_workflow"
+        needs_judger:
+          - "data_judger"
+      - name: "modelling"
+        processor:
+          type: "orchestrator"
+          name: "ds_modelling_workflow"
+        needs_judger:
+          - "model_judger"
+      - name: "delivery"
+        processor:
+          type: "orchestrator"
+          name: "ds_delivery_workflow"
+        needs_judger:
+          - "delivery_judger"
+      # The arbiter is its own step, not the delivery step's `next_step`: a step runs its processor,
+      # then its next_step, then its judges — so as a next_step it would have reviewed the delivery gate
+      # before that gate ran. It depends on every judge, so it goes last.
+      - name: "final_review"
+        processor:
+          type: "agent"
+          name: "judger_agent_1"

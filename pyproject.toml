@@ -1,0 +1,87 @@
+[tool.poetry]
+name = "feature-store-agent"
+version = "0.1.0"
+description = "An AI agent for managing, discovering, and serving ML features from a feature store."
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+# The two agents in this repo. There is no `src/feature_store_agent` — the packages are at the root,
+# each holding its own `agentic_configurations.yaml`, `prompts/` and `tools/`.
+packages = [{ include = "data_engineer" }, { include = "feature_engineer" }]
+license = "MIT"
+homepage = "https://github.com/your-org/feature-store-agent"
+repository = "https://github.com/your-org/feature-store-agent"
+keywords = ["feature-store", "ml", "agent", "feature-engineering"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+# The only hard runtime dependency. Two things in it are imported at module level, so nothing here
+# runs without it: `agent_builder.build_sql_db`, which `dataset.py` connects every SQL source with,
+# and `uilts.logger`, which every tool logs through.
+#
+# Its database drivers and vector stores are its own extras, not dependencies of this project, and
+# they are needed only for the backend actually in use. `connector_db` reaches all of them through
+# `build_sql_db`, and the `dbs:` blocks in both `agentic_configurations.yaml` are only constructed
+# once an agent's `type` is switched to "rag":
+#
+#     poetry run pip install "agent-builder[postgres] @ git+https://github.com/caglanakpinar/agentic_ai_builder.git"
+#
+# ...with `postgres`, `mysql`, `duckdb`, `bigquery`, `snowflake`, `faiss` or `all` in the brackets.
+agent-builder = { git = "https://github.com/caglanakpinar/agentic_ai_builder.git" }
+
+# The two file formats `read_dataset` cannot handle with the standard library. Both are imported
+# inside the reader that needs them rather than at the top of `dataset.py`, so a project that reads
+# CSV, JSON, JSONL or SQL never has to install either — which is why they are optional rather than
+# required. Everything else the readers need (csv, json, gzip, bz2, lzma) is stdlib.
+pyarrow = { version = ">=12.0", optional = true }    # read_parquet
+openpyxl = { version = ">=3.1", optional = true }    # read_excel
+
+[tool.poetry.extras]
+parquet = ["pyarrow"]
+excel = ["openpyxl"]
+files = ["pyarrow", "openpyxl"]  # poetry install -E files
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+pytest-cov = "^5.0"
+black = "^24.0"
+isort = "^5.13"
+flake8 = "^7.0"
+mypy = "^1.10"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+# No [tool.poetry.scripts] yet. The entry point that was here pointed at `feature_store_agent.main`,
+# which does not exist, and poetry installs a console script that fails on import rather than
+# skipping one it cannot resolve. Add it back when there is a main to point at.
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "--strict-markers --disable-warnings"
