@@ -57,7 +57,7 @@ from typing import Any
 # Same-package internals, deliberately shared rather than re-implemented: a value that counts as
 # missing here has to be the value that counts as missing there, or the two modules disagree about
 # what the data holds.
-from feature_engineer.tools.feature_prep import (
+from feature_enginering.tools.feature_prep import (
     FEATURE_PREP_STEPS,
     Table,
     _group_key,

@@ -2157,4 +2157,4 @@ def _grain_notes(report: Sequence[dict[str, Any]]) -> list[str]:
 # Importing the module is the registration: `auto_features` reads the helpers above and appends its
 # own `auto_*` steps to the catalogue. The import sits at the bottom, after everything it reads, so
 # the two modules resolve whichever one the caller imports first.
-from feature_engineer.tools import auto_features as _auto_features  # noqa: E402,F401
+from feature_enginering.tools import auto_features as _auto_features  # noqa: E402,F401
