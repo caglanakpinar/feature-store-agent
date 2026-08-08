@@ -71,6 +71,7 @@ Register the callers in `agentic_configurations.yaml` the way the other tools ar
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import logging
 import math
 from collections import Counter
@@ -114,6 +115,21 @@ MAX_CORRELATION = 0.95  # two features this alike carry one feature's worth of i
 LEAKAGE_SCORE = 0.98  # a score this high is usually the target wearing a different name
 
 SMOOTHING = 0.5  # added to every cell of a contingency table, so an empty one is not a divide by zero
+
+# What a statistic that divided by zero means, and it is always worth saying in full: the classes do
+# not overlap at all on this feature, which in real data is a leak far more often than a good feature.
+PERFECT_SEPARATION = (
+    "perfect separation: the classes do not overlap on this feature at all, which is usually the "
+    "target in disguise rather than a strong feature"
+)
+
+# `column_kinds` calls a column of these a boolean, but `to_number` reads none of them, so a yes/no
+# flag would drop out of every numeric measure — and out of the matrix scikit-learn is handed —
+# unless the words are read as the 1s and 0s they stand for.
+BOOLEAN_TOKENS: dict[str, float] = {
+    "1": 1.0, "true": 1.0, "yes": 1.0, "y": 1.0, "t": 1.0,
+    "0": 0.0, "false": 0.0, "no": 0.0, "n": 0.0, "f": 0.0,
+}
 
 
 # --------------------------------------------------------------------------------------------------
@@ -188,9 +204,14 @@ class Scoring:
         return self.task in ("binary", "multiclass")
 
     def numeric(self, column: str) -> list[float | None]:
-        """A column as floats, with None wherever it is missing or is not a number."""
+        """A column as floats, with None wherever it is missing or is not a number.
+
+        A column of yes/no or true/false is read as 1s and 0s: it is a number written in words, and
+        every numeric measure below would otherwise have nothing to score it with.
+        """
         if column not in self._numeric:
-            self._numeric[column] = [to_number(row.get(column)) for row in self.rows]
+            boolean = self.kinds.get(column) == "boolean"
+            self._numeric[column] = [_as_float(row.get(column), boolean) for row in self.rows]
         return self._numeric[column]
 
     def labels(self, column: str) -> list[str]:
@@ -216,7 +237,9 @@ class Scoring:
         if self.classification and self.task == "binary":
             positive = self.positive_class()
             return [
-                None if is_missing(row.get(self.target)) else float(_group_key(row.get(self.target)) == positive)
+                None
+                if is_missing(row.get(self.target))
+                else float(_group_key(row.get(self.target)) == positive)
                 for row in self.rows
             ]
         return self.numeric(self.target)
@@ -301,8 +324,10 @@ def _score_anova_f(scoring: Scoring, **options: Any) -> dict[str, dict[str, Any]
         statistic = _f_statistic(groups)
         if statistic is None:
             scores[column] = _unscored("not numeric, or a class with too few values")
-            continue
-        scores[column] = {"score": statistic, "groups": len(groups)}
+        elif not _finite(statistic):  # no variance inside the classes: the split is exact
+            scores[column] = _unscored(PERFECT_SEPARATION)
+        else:
+            scores[column] = {"score": statistic, "groups": len(groups)}
     return scores
 
 
@@ -394,7 +419,7 @@ def _score_sklearn_mutual_information(scoring: Scoring, **options: Any) -> dict[
     from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
 
     matrix, names, notes = _matrix(scoring)
-    target = _target_vector(scoring)
+    target = _target_array(scoring)
     estimate = mutual_info_classif if scoring.classification else mutual_info_regression
     values = estimate(matrix, target, random_state=0)
     return _from_vector(names, values, notes, key="bits")
@@ -409,13 +434,13 @@ def _score_f_test(scoring: Scoring, **options: Any) -> dict[str, dict[str, Any]]
     from sklearn.feature_selection import f_classif, f_regression
 
     matrix, names, notes = _matrix(scoring)
-    target = _target_vector(scoring)
+    target = _target_array(scoring)
     test = f_classif if scoring.classification else f_regression
     statistics, probabilities = test(matrix, target)
 
     scores = _from_vector(names, statistics, notes, key="f_statistic")
     for name, probability in zip(names, probabilities):
-        scores[name]["p_value"] = None if _nan(probability) else float(probability)
+        scores[name]["p_value"] = float(probability) if _finite(probability) else None
     return scores
 
 
@@ -432,7 +457,7 @@ def _score_random_forest(scoring: Scoring, **options: Any) -> dict[str, dict[str
     from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
     matrix, names, notes = _matrix(scoring)
-    target = _target_vector(scoring)
+    target = _target_array(scoring)
     forest = (RandomForestClassifier if scoring.classification else RandomForestRegressor)(
         n_estimators=int(options.get("trees", 200)),
         max_depth=options.get("max_depth"),
@@ -456,19 +481,22 @@ def _score_l1(scoring: Scoring, **options: Any) -> dict[str, dict[str, Any]]:
     from sklearn.preprocessing import StandardScaler
 
     matrix, names, notes = _matrix(scoring)
-    target = _target_vector(scoring)
+    target = _target_array(scoring)
     scaled = StandardScaler().fit_transform(matrix)
 
     if scoring.classification:
         model: Any = LogisticRegression(
-            penalty="l1", solver="liblinear", C=float(options.get("strength", 1.0)), random_state=0
+            solver="liblinear",  # the one solver that has always taken an L1 penalty
+            C=float(options.get("strength", 1.0)),
+            random_state=0,
+            **_l1_penalty(LogisticRegression),
         )
         model.fit(scaled, target)
-        weights = [max(abs(column) for column in row) for row in zip(*model.coef_)]
     else:
         model = Lasso(alpha=float(options.get("strength", 0.01)), random_state=0)
         model.fit(scaled, target)
-        weights = [abs(coefficient) for coefficient in model.coef_]
+
+    weights = _weights(model, len(names))
 
     scores = _from_vector(names, weights, notes, key="coefficient")
     for name in names:
@@ -483,6 +511,12 @@ def _score_rfe(scoring: Scoring, **options: Any) -> dict[str, dict[str, Any]]:
     A wrapper rather than a filter — it scores a feature by what the model does without it, so it
     catches a feature that only earns its place alongside another one.
 
+    RFE ranks nothing inside the set it keeps: every survivor comes back as rank 1. The score
+    therefore splits the two groups and orders each on its own terms — a kept feature lands in
+    0.5..1 on the strength of its coefficient in the final fit, an eliminated one in 0..0.5 on how
+    late it was dropped — so the ranking is an ordering rather than a tie between survivors.
+    `rank` and `kept` are reported as RFE gave them.
+
     Args:
         keep: How many features to keep. Defaults to half of them.
     """
@@ -490,7 +524,7 @@ def _score_rfe(scoring: Scoring, **options: Any) -> dict[str, dict[str, Any]]:
     from sklearn.linear_model import LinearRegression, LogisticRegression
 
     matrix, names, notes = _matrix(scoring)
-    target = _target_vector(scoring)
+    target = _target_array(scoring)
     keep = max(1, min(int(options.get("keep", max(1, len(names) // 2))), len(names)))
     estimator = (
         LogisticRegression(max_iter=1000, random_state=0)
@@ -499,15 +533,22 @@ def _score_rfe(scoring: Scoring, **options: Any) -> dict[str, dict[str, Any]]:
     )
     elimination = RFE(estimator, n_features_to_select=keep).fit(matrix, target)
 
-    # `ranking_` counts up from 1 for the survivors, so it is inverted into a score that, like every
-    # other method here, is larger for a better feature.
-    highest = max(elimination.ranking_)
-    scores = _from_vector(
-        names, [(highest - rank + 1) / highest for rank in elimination.ranking_], notes, key=None
-    )
-    for name, rank, kept in zip(names, elimination.ranking_, elimination.support_):
+    ranks = [int(rank) for rank in elimination.ranking_]
+    survivors = iter(_weights(elimination.estimator_, keep))
+    strongest = max(_weights(elimination.estimator_, keep)) or 1.0
+    dropped_range = max(max(ranks) - 1, 1)
+
+    scored: list[float] = []
+    for rank, kept in zip(ranks, elimination.support_):
+        if kept:
+            scored.append(0.5 + 0.5 * (next(survivors) / strongest))
+        else:
+            scored.append(0.5 * (max(ranks) - rank) / dropped_range)
+
+    scores = _from_vector(names, scored, notes, key=None)
+    for name, rank, kept in zip(names, ranks, elimination.support_):
         if not _unavailable(scores[name]):
-            scores[name].update({"rank": int(rank), "kept": bool(kept)})
+            scores[name].update({"rank": rank, "kept": bool(kept)})
     return scores
 
 
@@ -527,7 +568,7 @@ def _score_permutation(scoring: Scoring, **options: Any) -> dict[str, dict[str, 
     from sklearn.model_selection import train_test_split
 
     matrix, names, notes = _matrix(scoring)
-    target = _target_vector(scoring)
+    target = _target_array(scoring)
     stratify = target if scoring.classification and _every_class_twice(target) else None
     train_x, test_x, train_y, test_y = train_test_split(
         matrix, target, test_size=0.25, random_state=0, stratify=stratify
@@ -675,9 +716,12 @@ def resolve_method(method: str | None, task: str) -> tuple[str, Method]:
             f"method {name!r} needs a {' or '.join(chosen.tasks)} target, and this one is {task}"
         )
     if not chosen.available:
+        standalone = sorted(
+            available for available, method in SELECTION_METHODS.items() if method.requires is None
+        )
         raise ValueError(
             f"method {name!r} needs {chosen.requires} installed: `poetry install -E selection`. "
-            f"Methods that need nothing: {sorted(name for name, method in SELECTION_METHODS.items() if method.requires is None)}"
+            f"Methods that need nothing: {standalone}"
         )
     return name, chosen
 
@@ -840,6 +884,56 @@ def rank_features(
 # --------------------------------------------------------------------------------------------------
 # stage 3: redundancy
 # --------------------------------------------------------------------------------------------------
+def leakage_suspects(
+    rows: Table,
+    target: str,
+    features: Sequence[str],
+    task: str | None = None,
+    threshold: float = LEAKAGE_SCORE,
+    max_rows: int = MAX_ROWS,
+) -> list[dict[str, Any]]:
+    """Find the features that explain so much of the target that they are probably made from it.
+
+    Measured with normalised mutual information whatever method did the ranking, because leakage is a
+    property of the feature and the target rather than of the scorer someone picked — and most scores
+    are on scales where a fixed bar would mean nothing. A random forest's importances sum to one
+    across the features, so no single feature can reach 0.98 however perfectly it predicts; recursive
+    elimination gives its strongest survivor 1.0 by construction, so every run would flag one.
+
+    Args:
+        rows: The dataset.
+        target: The column being predicted.
+        features: The features to check.
+        task: "binary", "multiclass" or "regression". Inferred when omitted.
+        threshold: The share of the target's uncertainty a feature may resolve, 0..1.
+        max_rows: Rows to measure over.
+
+    Returns:
+        One entry per suspect: the feature, the share it resolves, and how that was measured.
+    """
+    if not features:
+        return []
+
+    sampled = _sampled(rows, max_rows)
+    scoring = Scoring(
+        rows=sampled,
+        target=target,
+        task=resolve_task(rows, target, task),
+        features=list(features),
+        kinds=column_kinds(sampled),
+    )
+    scores = _score_mutual_information(scoring)
+    return [
+        {
+            "feature": column,
+            "explains": round(entry["score"], 4),
+            "measure": "normalised mutual information",
+        }
+        for column, entry in scores.items()
+        if entry.get("score") is not None and entry["score"] >= threshold
+    ]
+
+
 def redundant_pairs(
     rows: Table,
     features: Sequence[str],
@@ -865,7 +959,10 @@ def redundant_pairs(
     kinds = column_kinds(sampled)
     columns = list(features)[:MAX_COMPARED]
 
-    numbers = {column: [to_number(row.get(column)) for row in sampled] for column in columns}
+    numbers = {
+        column: [_as_float(row.get(column), kinds.get(column) == "boolean") for row in sampled]
+        for column in columns
+    }
     labels = {column: [_group_key(row.get(column)) for row in sampled] for column in columns}
 
     pairs: list[dict[str, Any]] = []
@@ -920,8 +1017,10 @@ def select_features(
         max_missing_rate: The share of missing values a column is allowed before screening drops it.
         max_correlation: The association at which the weaker of two features is pruned. None to keep
             redundant features.
-        leakage_score: The score above which a feature is treated as leakage. None to keep them,
-            which is the right choice only when the "leak" is a feature you know to be legitimate.
+        leakage_score: The share of the target's uncertainty a feature may resolve, 0..1, before it
+            is treated as leakage — measured on its own terms rather than on the ranking method's
+            scale, see `leakage_suspects`. None to keep them, which is right only when the "leak" is
+            a feature you know to be available at prediction time.
         max_rows: Rows to score over.
         options: Extra arguments for the ranking method.
 
@@ -954,29 +1053,51 @@ def select_features(
         rows, target, usable, method=method, task=task, max_rows=max_rows, options=options
     )
     scored = [entry for entry in ranking if entry.get("score") is not None]
+    leaking: list[dict[str, Any]] = []
+
     for entry in ranking:
-        if entry.get("score") is None:
+        if entry.get("score") is not None:
+            continue
+        # A statistic that divided by zero did so because the feature splits the target exactly. That
+        # is the strongest evidence of leakage there is, so it belongs in that stage, not in "the
+        # method could not read this column".
+        separating = entry.get("note") == PERFECT_SEPARATION
+        if separating:
+            leaking.append({"feature": entry["feature"], "explains": 1.0, "measure": "perfect separation"})
+        dropped.append(
+            {
+                "feature": entry["feature"],
+                "stage": "leakage" if separating else "ranking",
+                "reason": entry.get("note") or "the method could not score it",
+            }
+        )
+
+    if leakage_score is not None and scored:
+        suspects = {
+            suspect["feature"]: suspect
+            for suspect in leakage_suspects(
+                rows,
+                target,
+                [entry["feature"] for entry in scored],
+                task=task,
+                threshold=leakage_score,
+                max_rows=max_rows,
+            )
+        }
+        for entry in list(scored):
+            suspect = suspects.get(entry["feature"])
+            if not suspect:
+                continue
+            leaking.append(suspect)
+            scored.remove(entry)
             dropped.append(
                 {
                     "feature": entry["feature"],
-                    "stage": "ranking",
-                    "reason": entry.get("note") or "the method could not score it",
+                    "stage": "leakage",
+                    "reason": f"explains {suspect['explains']:.4f} of the target, at or above the "
+                    f"leakage bar of {leakage_score}",
                 }
             )
-
-    leaking: list[dict[str, Any]] = []
-    if leakage_score is not None:
-        for entry in list(scored):
-            if entry["score"] >= leakage_score:
-                leaking.append({"feature": entry["feature"], "score": entry["score"]})
-                scored.remove(entry)
-                dropped.append(
-                    {
-                        "feature": entry["feature"],
-                        "stage": "leakage",
-                        "reason": f"scored {entry['score']:.4f}, at or above the leakage bar of {leakage_score}",
-                    }
-                )
 
     redundant: list[dict[str, Any]] = []
     if max_correlation is not None and len(scored) > 1:
@@ -1073,7 +1194,8 @@ def feature_selection_caller(
             the rows are keyed by, the date they belong to.
         max_missing_rate: The share of missing values a column is allowed.
         max_correlation: The association at which the weaker of two features is pruned.
-        leakage_score: The score at which a feature is treated as leakage rather than a good feature.
+        leakage_score: The share of the target a feature may explain, 0..1, before it is treated as
+            leakage rather than as a strong feature.
         options: Extra arguments for the ranking method, e.g. `{"trees": 500}`.
         output_path: Where to write the selected columns. Defaults to a file beside the input.
         limit: How many sample rows to return.
@@ -1196,7 +1318,10 @@ def feature_screening_caller(
         return {"status": "error", "message": str(error)}
 
 
-def list_feature_selection_methods_caller(method: str | None = None, task: str | None = None) -> dict[str, Any]:
+def list_feature_selection_methods_caller(
+    method: str | None = None,
+    task: str | None = None,
+) -> dict[str, Any]:
     """List the ranking methods, what each measures, and which of them can run here.
 
     Args:
@@ -1228,7 +1353,9 @@ def list_feature_selection_methods_caller(method: str | None = None, task: str |
         for name in names
         if not task or SELECTION_METHODS[name].supports(task)
     ]
-    missing = sorted({entry["requires"] for entry in listed if entry["requires"] and not entry["available"]})
+    missing = sorted(
+        {str(entry["requires"]) for entry in listed if entry["requires"] and not entry["available"]}
+    )
 
     return {
         "status": "ok",
@@ -1245,6 +1372,15 @@ def list_feature_selection_methods_caller(method: str | None = None, task: str |
 # --------------------------------------------------------------------------------------------------
 # the measures themselves
 # --------------------------------------------------------------------------------------------------
+def _as_float(value: Any, boolean: bool = False) -> float | None:
+    """A value as a float; with `boolean`, also the words a yes/no column is written with."""
+    number = to_number(value)
+    if number is not None or not boolean or is_missing(value):
+        return number
+
+    return BOOLEAN_TOKENS.get(_group_key(value).lower())
+
+
 def _pearson(left: Sequence[float], right: Sequence[float]) -> float | None:
     """Pearson correlation, or None when either side never varies."""
     if len(left) < 2:
@@ -1528,10 +1664,17 @@ def _matrix(scoring: Scoring) -> tuple[list[list[float]], list[str], dict[str, s
     return matrix, names, notes
 
 
-def _target_vector(scoring: Scoring) -> list[Any]:
-    """The target as scikit-learn wants it: class labels for classification, floats for regression."""
+def _target_array(scoring: Scoring) -> Any:
+    """The target as scikit-learn wants it: class labels for classification, floats for regression.
+
+    Returned as an array rather than a list because not every estimator accepts a list — `f_regression`
+    reads `y.size` off it — and numpy is always present wherever this is called from, since only the
+    scikit-learn scorers use it.
+    """
+    import numpy
+
     if scoring.classification:
-        return [_group_key(row.get(scoring.target)) for row in scoring.rows]
+        return numpy.asarray([_group_key(row.get(scoring.target)) for row in scoring.rows])
 
     numbers = scoring.numeric(scoring.target)
     present = [number for number in numbers if number is not None]
@@ -1539,7 +1682,7 @@ def _target_vector(scoring: Scoring) -> list[Any]:
         raise ValueError(f"the target {scoring.target!r} has no numeric values to regress on")
 
     fill = _quantile(sorted(present), 0.5)
-    return [fill if number is None else number for number in numbers]
+    return numpy.asarray([fill if number is None else number for number in numbers], dtype=float)
 
 
 def _from_vector(
@@ -1551,14 +1694,16 @@ def _from_vector(
     """Turn one score per encoded column back into the per-feature records every scorer returns."""
     scores: dict[str, dict[str, Any]] = {}
     for name, value in zip(names, values):
-        score = None if _nan(value) else float(value)
+        score = float(value) if _finite(value) else None
         entry: dict[str, Any] = {"score": score}
         if key and score is not None:
             entry[key] = score
         if name in notes:
             entry["encoding"] = notes[name]
         if score is None:
-            entry["note"] = "the estimator returned no score"
+            entry["note"] = (
+                PERFECT_SEPARATION if _infinite(value) else "the estimator returned no score"
+            )
         scores[name] = entry
 
     for column, note in notes.items():  # columns that could not be encoded at all
@@ -1566,11 +1711,50 @@ def _from_vector(
     return scores
 
 
-def _nan(value: Any) -> bool:
+def _l1_penalty(estimator: type) -> dict[str, Any]:
+    """How to ask this scikit-learn for an L1 penalty, which it renamed in 1.8.
+
+    `penalty="l1"` was deprecated in 1.8 in favour of `l1_ratio=1` and is removed in 1.10, while
+    versions before 1.8 have no `l1_ratio` at all. Reading the constructor's own signature settles
+    which of the two this installation wants, so neither an old nor a new version warns or breaks.
+    """
+    parameters = inspect.signature(estimator).parameters
+    return {"l1_ratio": 1.0} if "l1_ratio" in parameters else {"penalty": "l1"}
+
+
+def _weights(model: Any, count: int) -> list[float]:
+    """One non-negative weight per feature from a fitted linear model.
+
+    A multiclass fit has one row of coefficients per class, and a feature matters as much as the
+    class it matters most to, so the rows are collapsed by taking the largest magnitude.
+    """
+    coefficients = getattr(model, "coef_", None)
+    if coefficients is None:
+        return [1.0] * count
+
+    rows = coefficients if getattr(coefficients, "ndim", 1) > 1 else [coefficients]
+    return [max(abs(float(value)) for value in column) for column in zip(*rows)]
+
+
+def _finite(value: Any) -> bool:
+    """Whether a statistic is a real number a caller can sort, print and serialise.
+
+    Infinity is not: a tool reply is JSON, and JSON has no way to write one — `json.dumps` emits
+    `Infinity`, which a strict parser on the other side rejects. A score is therefore either a finite
+    number or None with the reason, never a value that cannot survive the trip.
+    """
     try:
-        return math.isnan(float(value))
+        return math.isfinite(float(value))
     except (TypeError, ValueError):
-        return True
+        return False
+
+
+def _infinite(value: Any) -> bool:
+    """Whether a statistic blew up rather than being missing — one class not overlapping the other."""
+    try:
+        return math.isinf(float(value))
+    except (TypeError, ValueError):
+        return False
 
 
 def _every_class_twice(labels: Sequence[Any]) -> bool:
