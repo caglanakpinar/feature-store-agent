@@ -72,8 +72,12 @@ What it can read, without you having to arrange any of it:
   by query.
 
 What comes back is one shape whatever it was read from: the rows, the column names in source order,
-the source it was read from, the reader that read it, and `truncated` — true when `limit` cut the
-read short and there was more behind it.
+the source it was read from, the reader that read it, `truncated` — true when `limit` cut the read
+short and there was more behind it — and `elapsed_seconds`, how long that read actually took,
+wall-clock. Call `.profile()` on what comes back for the formatted version of this — row count,
+column count, and each column paired with its inferred dtype (`int`, `float`, `bool`, `date`,
+`datetime`, `str`, `mixed`, or `unknown` where every value sampled was missing) — rather than reading
+dtypes off the raw rows by hand.
 
 ## What to do
 
@@ -96,11 +100,17 @@ read short and there was more behind it.
 - **Source** — what you read, exactly: the path, or `engine://database/table`, or the query.
 - **How it was reached** — a file, a configured connection by name, or connection fields. Never the
   credential itself.
-- **Shape** — row count, column count, and the column names.
+- **Results** — the formatted profile, not a description of it: row count, column count, and a table
+  of column name paired with inferred dtype, exactly as `.profile()` returned it. This is the one
+  section every request gets regardless of what else is true — even an escalation still reports the
+  shape of whatever sample got read before the block was hit.
 - **Reader and options** — which reader ran, and any option you had to pass to make it read
   correctly, with the reason. An option you needed is something the next stage should know about the
   source.
 - **Completeness** — the whole source, or a sample: say which, and where `truncated` came back true.
+- **Time to collect** — `elapsed_seconds` from the read, reported plainly. Where more than one read
+  happened — a bounded sample, then the full read — report both rather than only the last one, since
+  the difference is what tells the next stage whether the full read is worth doing again.
 - **Escalation** — begin the section with `Escalation: none` or `Escalation: required`. Where it is
   required, number the questions and give each one: what is blocked, and what you would read if
   forced to proceed.

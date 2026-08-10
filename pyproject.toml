@@ -8,13 +8,9 @@ readme = "README.md"
 # — the packages are at the root, each agent holding its own `agentic_configurations.yaml`, `prompts/`
 # and `tools/`, and `console` holding the code that assembles their steps into a pipeline.
 #
-# `feature_enginering` is spelled the way the directory is spelled, misspelling and all. It has to
-# match, or the build fails with "does not contain any element" — and the imports inside the package
-# (`from feature_enginering.tools.feature_prep import ...`) already spell it this way. Renaming the
-# directory to `feature_engineer` is a change to make in the code first, not here.
 packages = [
     { include = "data_engineer" },
-    { include = "feature_enginering" },
+    { include = "feature_engineering" },
     { include = "console" },
 ]
 license = "MIT"
@@ -71,6 +67,11 @@ scikit-learn = { version = ">=1.3", optional = true }
 # required dependencies.
 numpy = { version = ">=1.24", optional = true }
 click = "^8.4.2"
+
+# Imported at module level by `console/web_search.py` for the async DuckDuckGo client, so
+# it is a hard dependency rather than an extra — every agent binds to that module through
+# `<agent>/dbs/web_search_cache.py`.
+httpx = "^0.28"
 
 [tool.poetry.extras]
 parquet = ["pyarrow"]
