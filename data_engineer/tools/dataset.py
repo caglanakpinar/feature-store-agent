@@ -35,9 +35,11 @@ import inspect
 import json
 import lzma
 import re
+import time as _time
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
+from functools import wraps
 from itertools import chain
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -100,6 +102,9 @@ class Dataset:
         source: Where the rows came from: a file path, or `engine://database/table` for a db read.
         format: The reader that produced them, e.g. "delimited", "parquet", "sql".
         truncated: True when `limit` cut the read short and the source held more rows.
+        elapsed_seconds: How long the read that produced this `Dataset` took, wall-clock. Set by the
+            reader itself — see `_timed` — so it is `None` only on a `Dataset` built by hand rather
+            than read.
     """
 
     rows: list[dict[str, Any]]
@@ -107,6 +112,7 @@ class Dataset:
     source: str
     format: str
     truncated: bool = False
+    elapsed_seconds: float | None = None
 
     def __len__(self) -> int:
         return len(self.rows)
@@ -150,13 +156,109 @@ class Dataset:
             "column_count": len(self.columns),
             "columns": self.columns,
             "truncated": self.truncated,
+            "elapsed_seconds": self.elapsed_seconds,
             "rows": [{key: _json_safe(value) for key, value in row.items()} for row in rows],
         }
+
+    def dtypes(self, sample_size: int = 200) -> dict[str, str]:
+        """Infer each column's dtype from a sample of its values.
+
+        One of `"int"`, `"float"`, `"bool"`, `"date"`, `"datetime"`, `"str"`, `"mixed"` — where more
+        than one of those appears in the sample — or `"unknown"`, where every value sampled was
+        missing. Reads a sample rather than every row because a wide dataset can have millions of
+        rows and this only needs to know the shape of the values, not all of them.
+        """
+        return {column: _column_dtype(self, column, sample_size=sample_size) for column in self.columns}
+
+    def profile(self, sample_size: int = 200) -> dict[str, Any]:
+        """A formatted summary of the read: shape, column names and dtypes, and how long it took.
+
+        This is the shape a `data_reader_tool` result reports back — column names paired with their
+        inferred dtype, the row and column counts, and `elapsed_seconds` — separate from `to_dict`,
+        which carries the rows themselves. A profile is what gets reported; rows are what get handed
+        to the next stage.
+        """
+        dtypes = self.dtypes(sample_size=sample_size)
+        return {
+            "source": self.source,
+            "format": self.format,
+            "row_count": len(self.rows),
+            "column_count": len(self.columns),
+            "columns": [{"name": column, "dtype": dtypes[column]} for column in self.columns],
+            "truncated": self.truncated,
+            "elapsed_seconds": self.elapsed_seconds,
+        }
+
+
+def _is_missing(value: Any) -> bool:
+    """A value counts as missing for dtype inference the same way it does everywhere else: `None`, or
+    one of `MISSING_VALUES` once trimmed and lowercased."""
+    if value is None:
+        return True
+    return isinstance(value, str) and value.strip().lower() in MISSING_VALUES
+
+
+def _column_dtype(data: "Dataset", column: str, sample_size: int = 200) -> str:
+    """Infer one column's dtype from its first `sample_size` non-missing values.
+
+    Values already typed by the reader (a DB driver's own `int`, `float`, `datetime`, …) are read off
+    directly; values still strings, as a delimited or JSON reader with `coerce=False` leaves them, are
+    tested against the same patterns `coerce_types` in `data_prep.py` uses. `"mixed"` where the sample
+    disagrees with itself, `"unknown"` where every value sampled was missing.
+    """
+    sample = [row.get(column) for row in data.rows[:sample_size] if not _is_missing(row.get(column))]
+    if not sample:
+        return "unknown"
+
+    if all(isinstance(value, bool) for value in sample):
+        return "bool"
+    if all(isinstance(value, int) and not isinstance(value, bool) for value in sample):
+        return "int"
+    if all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in sample):
+        return "float"
+    if all(isinstance(value, datetime) for value in sample):
+        return "datetime"
+    if all(isinstance(value, date) for value in sample):
+        return "date"
+    if all(isinstance(value, Decimal) for value in sample):
+        return "float"
+
+    if all(isinstance(value, str) for value in sample):
+        stripped = [value.strip() for value in sample]
+        if all(INTEGER.match(value) for value in stripped):
+            return "int"
+        if all(INTEGER.match(value) or DECIMAL.match(value) for value in stripped):
+            return "float"
+        if all(value.lower() in BOOLEANS for value in stripped):
+            return "bool"
+        return "str"
+
+    return "mixed"
+
+
+def _timed(reader: Callable[..., Dataset]) -> Callable[..., Dataset]:
+    """Wrap a reader so the `Dataset` it returns carries how long that read actually took.
+
+    Applied to every public reader below, including `read_dataset`, so `elapsed_seconds` is set
+    whether a caller reads through the router or calls a specific reader directly. Where `read_dataset`
+    dispatches to another decorated reader, its own timing — routing plus the read — overwrites the
+    inner reader's, which is the number worth reporting for whichever call the agent actually made.
+    """
+
+    @wraps(reader)
+    def wrapped(*args: Any, **kwargs: Any) -> Dataset:
+        start = _time.perf_counter()
+        data = reader(*args, **kwargs)
+        data.elapsed_seconds = _time.perf_counter() - start
+        return data
+
+    return wrapped
 
 
 # ---- files ------------------------------------------------------------------------------------------
 
 
+@_timed
 def read_delimited(
     path: str | Path,
     delimiter: str | None = None,
@@ -227,6 +329,7 @@ def read_delimited(
     return _dataset(records, str(path), "delimited", names, columns, truncated)
 
 
+@_timed
 def read_json(
     path: str | Path,
     encoding: str = "utf-8",
@@ -262,6 +365,7 @@ def read_json(
     return _dataset(records, str(path), "json", None, columns, truncated)
 
 
+@_timed
 def read_jsonl(
     path: str | Path,
     encoding: str = "utf-8",
@@ -310,6 +414,7 @@ def read_jsonl(
     return _dataset(records, str(path), "jsonl", None, columns, truncated)
 
 
+@_timed
 def read_parquet(
     path: str | Path,
     limit: int | None = None,
@@ -357,6 +462,7 @@ def read_parquet(
     return _dataset(records, str(path), "parquet", wanted or names, None, truncated)
 
 
+@_timed
 def read_excel(
     path: str | Path,
     sheet: str | int | None = None,
@@ -466,6 +572,7 @@ def connector_db(
     return connector
 
 
+@_timed
 def read_sql(
     query: str,
     db: str | None = None,
@@ -513,6 +620,7 @@ def read_sql(
     return _dataset(records, _source_of(connector), "sql", None, columns, truncated)
 
 
+@_timed
 def read_table(
     table: str,
     db: str | None = None,
@@ -575,6 +683,7 @@ READERS: dict[str, Callable[..., Dataset]] = {
 }
 
 
+@_timed
 def read_dataset(
     data_source: str | Path | None = None,
     format: str | None = None,
@@ -641,6 +750,60 @@ def read_dataset(
 
     logger.info(f"Reading {path} as {reader_name}.")
     return reader(path, limit=limit, columns=columns, **_accepted(reader, options))
+
+
+def data_reader_caller(
+    data_source: str | None = None,
+    table: str | None = None,
+    query: str | None = None,
+    db: str | None = None,
+    connection: dict[str, Any] | None = None,
+    limit: int | None = None,
+    columns: Sequence[str] | None = None,
+    format: str | None = None,
+    options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Tool entry point for `data_reader_tool` — see `data_engineer/prompts/data_reader.md`.
+
+    A JSON-safe wrapper around `read_dataset`: an agent's tool call gets back the formatted profile
+    `.profile()` builds, plus a capped sample of rows, rather than the `Dataset` itself, which is not
+    something a tool result can carry across the round trip to the model.
+
+    Args:
+        data_source: File path, table name, or SQL — whichever this source is.
+        table: A table to read, when passing it in `data_source` would be ambiguous.
+        query: SQL to run instead of reading a table or a file.
+        db: Name of a `dbs:` entry to connect with.
+        connection: Connection fields, for a database no config describes.
+        limit: Stop after this many rows.
+        columns: Keep only these columns.
+        format: Override what the source looks like: "delimited", "json", "jsonl", "parquet",
+            "excel", or "sql". Only needed when the extension lies or there is none.
+        options: Reader-specific arguments — `delimiter`, `encoding`, `has_header`, `column_names`,
+            `coerce`, `missing_values`, `record_path`, `skip_invalid`, `sheet`. Anything the chosen
+            reader does not take is dropped rather than failing the call.
+
+    Returns:
+        `status`, the formatted profile (source, format, row/column counts, columns with inferred
+        dtypes, `truncated`, `elapsed_seconds`), and `sample_rows`. On failure,
+        `{"status": "error", "message": ...}`.
+    """
+    try:
+        data = read_dataset(
+            data_source=data_source,
+            format=format,
+            query=query,
+            table=table,
+            db=db,
+            connection=connection,
+            limit=limit,
+            columns=columns,
+            **(options or {}),
+        )
+        return {"status": "ok", **data.profile(), "sample_rows": data.head(10)}
+    except Exception as error:
+        logger.exception("data_reader_caller failed.")
+        return {"status": "error", "message": str(error)}
 
 
 def detect_format(path: str | Path) -> str:

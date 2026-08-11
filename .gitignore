@@ -98,5 +98,5 @@ htmlcov/
 .idea/
 *.iml
 data_engineer/dbs/*.py
-feature_enginering/dbs/*.py
+feature_engineering/dbs/*.py
 *.pyc

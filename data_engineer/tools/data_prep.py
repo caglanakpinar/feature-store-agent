@@ -36,7 +36,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from data_engineer.tools.dataset import BOOLEANS, DECIMAL, INTEGER, MISSING_VALUES, Dataset
+from data_engineer.tools.dataset import BOOLEANS, DECIMAL, INTEGER, MISSING_VALUES, Dataset, read_dataset
 from uilts.logger import logger
 
 
@@ -654,6 +654,55 @@ def prepare(
         prepared = step(prepared, **_accepted(step, arguments))
 
     return prepared
+
+
+def data_prep_caller(
+    data_source: str | None = None,
+    steps: Sequence[str | dict[str, Any]] | None = None,
+    options: dict[str, dict[str, Any]] | None = None,
+    output_path: str | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Tool entry point for `data_prep_tool` — see `data_engineer/prompts/data_prep.md`.
+
+    Reads `data_source` fresh rather than taking a `Dataset` in, the way every other tool in this
+    config's `data_source: str` argument does: a tool call cannot carry a dataclass across the round
+    trip to the model, so each stage re-reads from where the last one left its output.
+
+    Args:
+        data_source: Path to the dataset to prepare — typically the `output_path` a previous stage
+            wrote to, or the original source if nothing has changed it yet.
+        steps: The steps to run, in order. Each is a step name on its own, or a mapping naming the
+            step and carrying its arguments inline (`{"step": "fill_missing", "strategy": "median"}`).
+            Defaults to `DEFAULT_STEPS`.
+        options: Per-step arguments keyed by step name, for a step named as a plain string in `steps`
+            — `{"fill_missing": {"strategy": "median"}, "clip_outliers": {"method": "iqr"}}`. Inline
+            arguments already on a step in `steps` take precedence over this.
+        output_path: Where to write the prepared dataset as CSV, for the next stage to read.
+        limit: Read at most this many rows, for a first pass over a large source.
+
+    Returns:
+        `status`, the prepared dataset's shape and sample rows, `steps` (one log entry per step run —
+        what it changed), and `output_path`. On failure, `{"status": "error", "message": ...}`.
+    """
+    try:
+        data = read_dataset(data_source, limit=limit)
+        if not data.rows:
+            return {"status": "error", "message": "the dataset is empty"}
+
+        resolved: list[str | dict[str, Any]] = []
+        for entry in steps if steps is not None else DEFAULT_STEPS:
+            inline = dict(entry) if isinstance(entry, dict) else {}
+            name = inline.pop("step", None) or inline.pop("name", None) or entry
+            extra = dict((options or {}).get(str(name), {}))
+            resolved.append({"step": name, **extra, **inline})
+
+        prepared = prepare(data, resolved)
+        written = write_csv(prepared, output_path) if output_path else None
+        return {"status": "ok", **prepared.to_dict(limit=10), "output_path": written}
+    except Exception as error:
+        logger.exception("data_prep_caller failed.")
+        return {"status": "error", "message": str(error)}
 
 
 def write_csv(source: Dataset | Prepared, path: str | Path, delimiter: str = ",") -> str:
