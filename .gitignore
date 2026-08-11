@@ -97,3 +97,6 @@ htmlcov/
 .vscode/
 .idea/
 *.iml
+data_engineer/dbs/*.py
+feature_enginering/dbs/*.py
+*.pyc
