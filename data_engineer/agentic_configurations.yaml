@@ -1,0 +1,314 @@
+
+llms:
+  generator_llm_1:  # the workhorse behind the specialists
+    model: "claude/claude-sonnet-5"
+    api_key: CLAUDE
+    max_tokens: 16000
+    type: "generator"
+
+  generator_llm_2:  # for the short structured answers — still needs room to think first
+    model: "claude/claude-sonnet-5"
+    api_key: CLAUDE
+    max_tokens: 8000
+    type: "generator"
+
+  generator_llm_thinker:  # every agent's fallback when its primary call fails
+    model: "claude/claude-sonnet-5"
+    api_key: CLAUDE
+    max_tokens: 16000
+    type: "generator"
+
+  judger_agent_1:  # the review comes from a stronger model than the work it is reviewing
+    model: "claude/claude-opus-5"
+    api_key: CLAUDE
+    max_tokens: 16000
+    type: "judger"
+
+
+dbs:
+  # The knowledge base the problem thinker retrieves from once `rag_problem_thinker_agent.type` is
+  # switched to "rag". `dimension` must match the width of the embeddings model below.
+  - name: "ds_knowledge_db"
+    type: "vector"
+    db: "faiss"
+    path: "benchmarks/artifacts/ds_knowledge.index"
+    dimension: 3072
+    metric: "cosine"
+
+  # The knowledge base the problem thinker retrieves from once `rag_problem_thinker_agent.type` is
+  # switched to "rag". `dimension` must match the width of the embeddings model below.
+  - name: "ds_feature_knowledge_db"
+    type: "vector"
+    db: "faiss"
+    path: "benchmarks/artifacts/ds_knowledge.index"
+    dimension: 3072
+    metric: "cosine"
+
+
+embeddings:
+  rag_embeddings:
+    model: "google/gemini-embedding-001"
+    api_key: GEMINI
+
+
+tools:
+  # ---- data ---------------------------------------------------------------------------------------
+  # Every caller below is real, importable code in this package — `data_engineer.tools.*` — not the
+  # `benchmarks.tools.*` placeholders this block used to point at, which name a module that does not
+  # exist anywhere in this repo and left every tool unresolvable (`Tool.function` stays `None`, and
+  # `ToolBox.build_tools` drops it with a warning). Each tool here is the one its matching prompt in
+  # `prompts/` already documents in full: `data_reader.md`, `data_prep.md`, `analyzer.md`.
+  - name: "data_reader_tool"
+    description: "Read a source — a file, a table, or a query — into one tabular shape, and report its formatted profile: row count, column count, column names paired with inferred dtype, and how long the read took."
+    caller: "data_engineer.tools.dataset.data_reader_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "The file path, table name, or SQL — whichever this source is."
+        required: false
+      - name: "table"
+        type: "str"
+        description: "A table to read, when passing it in data_source would be ambiguous."
+        required: false
+      - name: "query"
+        type: "str"
+        description: "SQL to run instead of reading a table or a file."
+        required: false
+      - name: "db"
+        type: "str"
+        description: "Name of a dbs: entry to connect with."
+        required: false
+      - name: "connection"
+        type: "dict"
+        description: "Connection fields, for a database no config describes: db (engine), host, port, database, user, password, connection_string, path, project, credentials."
+        required: false
+      - name: "limit"
+        type: "int"
+        description: "Stop after this many rows."
+        required: false
+      - name: "columns"
+        type: "list"
+        description: "Keep only these columns."
+        required: false
+      - name: "format"
+        type: "str"
+        description: "Override what the source looks like. Only needed when the extension lies or there is none."
+        enum: ["delimited", "json", "jsonl", "parquet", "excel", "sql"]
+        required: false
+      - name: "options"
+        type: "dict"
+        description: "Reader-specific arguments: delimiter, encoding, has_header, column_names, coerce, missing_values for delimited text; record_path for JSON; skip_invalid for JSON Lines; sheet for Excel."
+        required: false
+
+  - name: "data_prep_tool"
+    description: "Run named prep steps over a dataset in order — naming, typing, duplicates, missing values, outliers, derived columns — and report exactly what each step changed."
+    caller: "data_engineer.tools.data_prep.data_prep_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the dataset to prepare — typically a previous stage's output_path."
+        required: false
+      - name: "steps"
+        type: "list"
+        description: "Steps to run, in order: normalize_columns, strip_whitespace, coerce_types, drop_duplicates, drop_missing_rows, fill_missing, drop_missing_columns, drop_constant_columns, clip_outliers, transform. Each is a step name on its own, or {step, ...its own arguments}. Defaults to the standard cleaning sequence."
+        required: false
+      - name: "options"
+        type: "dict"
+        description: "Per-step arguments keyed by step name, for a step named as a plain string in steps — e.g. {'fill_missing': {'strategy': 'median'}, 'clip_outliers': {'method': 'iqr'}}."
+        required: false
+      - name: "output_path"
+        type: "str"
+        description: "Where to write the prepared dataset as CSV, for the next stage to read."
+        required: false
+      - name: "limit"
+        type: "int"
+        description: "Read at most this many rows, for a first pass over a large source."
+        required: false
+
+  - name: "data_analyzer_tool"
+    description: "Analyse a dataset before touching it: describe every column, missing values, duplicates, outliers, distributions, correlations, target balance, time span and grain — with a recommended cleaning and feature-prep plan."
+    caller: "data_engineer.tools.analyzer.analyzer_caller"
+    args:
+      - name: "data_source"
+        type: "str"
+        description: "Path to the dataset to analyse."
+        required: false
+      - name: "analyzers"
+        type: "list"
+        description: "Which analyzers to run, in order. Call data_analyzer_steps_tool for the catalogue. Defaults to all of them."
+        required: false
+      - name: "target"
+        type: "str"
+        description: "The column being predicted, for balance and leakage checks."
+        required: false
+      - name: "id_columns"
+        type: "list"
+        description: "Entity columns. Inferred from the names and the values when omitted."
+        required: false
+      - name: "date_columns"
+        type: "list"
+        description: "Timestamp columns. Inferred from the values when omitted."
+        required: false
+      - name: "columns"
+        type: "list"
+        description: "Restrict the column-by-column analyses to these."
+        required: false
+      - name: "limit"
+        type: "int"
+        description: "Read at most this many rows, for a first look at a large source."
+        required: false
+      - name: "detail"
+        type: "str"
+        description: "'summary' returns each analyzer's sentence and findings; 'full' also returns the numbers behind them."
+        enum: ["summary", "full"]
+        required: false
+      - name: "options"
+        type: "dict"
+        description: "Further analyzer arguments: max_missing_rate, method, factor, bins, top, reference_date."
+        required: false
+      - name: "output_path"
+        type: "str"
+        description: "Where to write the full report as JSON, for a summarising step to collect."
+        required: false
+
+  - name: "data_analyzer_steps_tool"
+    description: "List every analyzer, what it looks at, and what it takes."
+    caller: "data_engineer.tools.analyzer.list_analyzers_caller"
+    args:
+      - name: "analyzer"
+        type: "str"
+        description: "Restrict the listing to one analyzer."
+        required: false
+
+
+agents:
+  rag_data_engineer_decider_agent:  # starts the run — no dependency_agent
+    type: "thinker"  # switch to "rag" to retrieve from ds_knowledge_db before answering
+    db_vector: "ds_knowledge_db"
+    llm: "generator_llm_1"  # was "rag_llm", which names no `llms:` entry; swap to a dedicated one once type switches to "rag"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "benchmarks/prompts/rag_problem_thinker_prompt.md"
+
+  data_reader_agent:
+    type: "generator"
+    dependency_agent: "rag_data_engineer_decider_agent"
+    llm: "generator_llm_1"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "prompts/data_reader.md"
+    tools:
+      - "data_reader_tool"
+
+  data_analyzer_agent:
+    type: "generator"
+    dependency_agent: "data_reader_agent"
+    llm: "generator_llm_1"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "prompts/analyzer.md"
+    tools:
+      - "data_analyzer_tool"
+      - "data_analyzer_steps_tool"
+
+  data_preprocessor_agent:
+    type: "generator"
+    dependency_agent: "data_analyzer_agent"
+    llm: "generator_llm_1"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "prompts/data_prep.md"
+    tools:
+      - "data_prep_tool"
+
+  data_quality_agent:
+    type: "generator"
+    dependency_agent: "data_preprocessor_agent"
+    llm: "generator_llm_1"
+    substitute_llm: "generator_llm_thinker"
+    # No dedicated data-quality prompt exists yet; analyzer.md's findings (info/warning/risk) are
+    # the closest fit this config has today — see the note on this agent in `data_engineer/agents/workers.py`.
+    prompt_path: "prompts/analyzer.md"
+    tools:
+      - "data_analyzer_tool"
+      - "data_analyzer_steps_tool"
+
+  data_engineer_pipeline_creator:
+    type: "generator"
+    dependency_agent:
+      - "data_preprocessor_agent"
+      - "data_analyzer_agent"
+      - "data_reader_agent"
+    llm: "generator_llm_1"
+    substitute_llm: "generator_llm_thinker"
+    # No dedicated pipeline-assembly prompt exists yet — this agent still needs one written.
+    prompt_path: "benchmarks/prompts/data_engineer_prompt.md"
+    tools:
+      - "data_reader_tool"
+      - "data_analyzer_tool"
+      - "data_analyzer_steps_tool"
+      - "data_prep_tool"
+
+
+  # ---- judges -------------------------------------------------------------------------------------
+  # One judge per stage, each holding that stage to numeric bars. A `min_`/`max_` prefix carries the
+  # direction, and the stem names the measurement `run_benchmark.py` computes from the tools — so every
+  # bar below is evaluated twice: the judge argues about it, and the runner does the arithmetic.
+  problem_judger:
+    type: "judger"
+    dependency_agent:
+      - "rag_data_engineer_decider_agent"
+      - "data_reader_agent"
+    llm: "judger_agent_1"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "benchmarks/prompts/problem_judger_prompt.md"
+    thresholds:
+      min_rows: 1000            # too small to train on below this
+      min_positive_rate: 0.02   # a positive class rarer than this is an anomaly-detection problem
+      max_positive_rate: 0.50   # above this the "positive" class is the majority
+      max_missing_rate: 0.10    # no column may be missing more than a tenth of its values
+
+  data_judger:
+    type: "judger"
+    dependency_agent:
+      - "data_preprocessor_agent"
+      - "data_quality_agent"
+    llm: "judger_agent_1"
+    substitute_llm: "generator_llm_thinker"
+    prompt_path: "benchmarks/prompts/data_judger_prompt.md"
+    thresholds:
+      max_duplicate_rows: 0            # duplicates must be gone, not merely counted
+      min_rows_after_cleaning: 2000    # cleaning must not throw the dataset away
+      min_feature_correlation: 0.10    # the strongest feature must carry real signal
+
+  # model_judger, delivery_judger and the final judger_agent_1 arbiter used to live here, gating a
+  # modelling/evaluation/delivery pipeline (model_developer, evaluator, mlops, benchmark) that this
+  # file never defined — leftover from the "benchmarks" example config this yaml was cloned from, not
+  # something data_engineer's own agents produce. Removed rather than left dangling; they belong in
+  # whichever agent's config actually builds and evaluates a model, once one exists.
+
+
+orchestrators:
+  # The sub-agents in this stage run in this order — every output is available to the next by name.
+  ds_data_prep_workflow:
+    sub_agents:
+      - "data_reader_agent"
+      - "data_analyzer_agent"
+      - "data_preprocessor_agent"
+      - "data_quality_agent"
+      - "data_engineer_pipeline_creator"
+
+
+pipeline:
+  - name: "data_engineering_workflow"
+    loops: 1
+    description: "Decide what the request needs, then read, analyse, prepare and quality-check the dataset, gating each stage on a judge."
+    steps:
+      - name: "decision"
+        processor:
+          type: "agent"
+          name: "rag_data_engineer_decider_agent"
+        needs_judger:
+          - "problem_judger"
+      - name: "data_preparation"
+        processor:
+          type: "orchestrator"
+          name: "ds_data_prep_workflow"
+        needs_judger:
+          - "data_judger"
