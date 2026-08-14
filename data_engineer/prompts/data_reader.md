@@ -117,6 +117,18 @@ dtypes off the raw rows by hand.
 - **Handover** — the one thing the stages after you need: where the rows now are, and what one row
   is. Analysis and cleaning start from this.
 
+## Result format
+
+Wrap the whole of what you produced above in one JSON object, and nothing else — no prose before or
+after it, no markdown fences:
+
+    {"Escalation": true, "output": "..."}
+
+- `Escalation` — `true` when the Escalation section above reads `required`, `false` when it reads
+  `none`.
+- `output` — the full report from "## What to produce", as one string: every section, in the order
+  listed there, exactly as it would read on its own.
+
 ## Rules
 
 - Never invent a source. Not a path, not a table name, not a host. A read that did not happen is a

@@ -1,0 +1,27 @@
+
+llms:
+  generator_llm_thinker:  # the workhorse behind the specialists
+    model: "gemini/gemini-3.1-flash-lite"
+    api_key: GEMINI
+    max_tokens: 16000
+    type: "generator"
+  generator_llm_thinker_2:  # the workhorse behind the deciders
+    model: "gemini/gemini-3.1-flash-lite"
+    api_key: GEMINI
+    max_tokens: 16000
+    type: "generator"
+
+agents:
+  chat_agent:  # the front door — no dependency_agent, `cli.py generate` is what talks to it
+    type: "generator"
+    llm: "generator_llm_thinker"
+    substitute_llm: "generator_llm_thinker_2"
+    prompt_path: "prompts/chat.md"
+
+  requirement_agent:  # the specialist that handles requirements
+    type: "generator"
+    llm: "generator_llm_thinker"
+    substitute_llm: "generator_llm_thinker_2"
+    prompt_path: "prompts/requirements.md"
+    dependencies:
+      - "chat_agent"

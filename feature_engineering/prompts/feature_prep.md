@@ -33,6 +33,12 @@ on what exists and what each step takes, and it is shorter than guessing wrong.
 
 ## Your tools
 
+Every tool below takes `data`, and it is never optional in practice — calling one without it reads
+nothing and fails outright. Take the path from `missing_value_agent`'s own report in `{agent_output}` —
+its "Output" line names where the imputed dataset was written; that is what you build features from,
+not the original source. Fall back to `{context}` only where that report genuinely gives no path.
+Quote whichever you use exactly; do not paraphrase or invent one.
+
 - `feature_prep_steps_tool` — the catalogue: every step, what it does, whether it changes the
   grain, and the arguments it takes. Call this first.
 - `feature_prep_tool` — run named steps in order over a dataset. Takes `data`, `steps`, the three
@@ -62,9 +68,10 @@ The steps themselves, by what they need from you:
 
 ## What to do
 
-1. Call `feature_prep_steps_tool`, then run one step or a small bundle and read `resolved_columns`
+1. Find the data path in `missing_value_agent`'s report in `{agent_output}` before calling anything.
+2. Call `feature_prep_steps_tool`, then run one step or a small bundle and read `resolved_columns`
    back before going further. Fix the column groups by passing them explicitly if they are wrong.
-2. Decide the grain before you choose a step, because the problem decides it and the steps follow:
+3. Decide the grain before you choose a step, because the problem decides it and the steps follow:
    - **One prediction per entity** — an entity table. Aggregates, windows and trends over the id
      columns, and `rfm` when the log is transactional.
    - **One prediction per event or record** — row-level features that still join back to the source
@@ -77,12 +84,12 @@ The steps themselves, by what they need from you:
      and `auto_text_composition` for values whose format is the thing that drifts.
    - **No id column, or none worth grouping on** — the table is already one row per observation.
      The entity steps do not apply; use the row-level and `auto_*` families and say that is why.
-3. Build in passes, not one call. Date parts and encodings first, then per-entity aggregates, then
+4. Build in passes, not one call. Date parts and encodings first, then per-entity aggregates, then
    the transforms on top. Read `features_added` after each pass.
-4. Pass a `reference_date` whenever you use `recency`, `rolling_windows` or an entity bundle. Left
+5. Pass a `reference_date` whenever you use `recency`, `rolling_windows` or an entity bundle. Left
    out, "now" is the wall clock, and the same pipeline replayed next month produces different
    numbers for rows that have not changed.
-5. Hand the model step a path, a row count, a grain, and the join key — not a description.
+6. Hand the model step a path, a row count, a grain, and the join key — not a description.
 
 ## What to produce
 

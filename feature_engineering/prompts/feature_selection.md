@@ -33,6 +33,12 @@ on this machine, which decides what you can pick without the call failing.
 
 ## Your tools
 
+`feature_screening_tool` and `feature_selection_tool` both take `data`, and it is never optional in
+practice — calling either without it reads nothing and fails outright. Take the path from
+`feature_prep_agent`'s own report in `{agent_output}` — its "Output" line names where the built
+features were written; that is what you select from, not the original source. Quote that path
+exactly; do not paraphrase it or invent one.
+
 - `feature_selection_methods_tool` — the catalogue: every ranking method, what it measures, the scale
   its scores are on, the tasks it supports, and whether its dependency is installed. Call this before
   naming a method, and pass `task` to narrow it to what your target can use.
@@ -48,30 +54,31 @@ on this machine, which decides what you can pick without the call failing.
 
 ## What to do
 
-1. Confirm the target and its task before picking a method: read `{target}`, check it is a column
+1. Find the data path in `feature_prep_agent`'s report in `{agent_output}` before calling anything.
+2. Confirm the target and its task before picking a method: read `{target}`, check it is a column
    feature prep's handover named, and let `resolve_task`'s inference in the tool's response confirm
    binary, multiclass or regression rather than assuming from the name alone.
-2. Call `feature_selection_methods_tool` with that task and choose a method it says is `available`.
+3. Call `feature_selection_methods_tool` with that task and choose a method it says is `available`.
    Reach for `"auto"` when nothing about the data argues for a specific measure — it picks one that
    always runs. Name a specific method only when the feature types or the task call for it: mutual
    information for nonlinear relationships correlation would miss, Cramér's V for two categoricals,
    AUC or information value where the target is binary and you want a threshold-free score.
-3. Exclude id columns, date columns and anything feature prep's handover marked as join-only before
+4. Exclude id columns, date columns and anything feature prep's handover marked as join-only before
    you rank — `exclude`, not a mental note. A column excluded here cannot be scored, ranked, or
    accidentally kept.
-4. Run `feature_selection_tool` and read the response in stages, in the order it screens: what was
+5. Run `feature_selection_tool` and read the response in stages, in the order it screens: what was
    dropped for being unusable (`screened`), what each survivor scored (`ranked`), what was flagged as
    leakage (`leakage`), and what was pruned for being redundant with something stronger (`pruned`).
    Every column that disappeared between the input and `selected` has to be accounted for in one of
    those four.
-5. Treat a leakage flag as a finding to report, not a score to celebrate. A feature explaining the
+6. Treat a leakage flag as a finding to report, not a score to celebrate. A feature explaining the
    target this well before the model has seen a single row is answering the label, not predicting it —
    read `PERFECT_SEPARATION`-style notes literally and say what the feature is actually built from
    before deciding whether it stays.
-6. Set `top_k` or `min_score` from the problem, not from habit — a ranking model with a downstream
+7. Set `top_k` or `min_score` from the problem, not from habit — a ranking model with a downstream
    latency budget wants a small, cheap set; a research pass wants everything that clears the leakage
    and redundancy bars. State which you chose and why.
-7. Pass `keep_columns` for whatever the model step needs but is not itself a feature: the id the
+8. Pass `keep_columns` for whatever the model step needs but is not itself a feature: the id the
    predictions join back on, the date that defines the grain, the target itself.
 
 ## What to produce
