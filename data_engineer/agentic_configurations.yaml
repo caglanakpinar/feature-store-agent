@@ -1,26 +1,26 @@
 
 llms:
   generator_llm_1:  # the workhorse behind the specialists
-    model: "claude/claude-sonnet-5"
-    api_key: CLAUDE
+    model: "gemini/gemini-3.1-flash-lite"
+    api_key: GEMINI
     max_tokens: 16000
     type: "generator"
 
   generator_llm_2:  # for the short structured answers — still needs room to think first
-    model: "claude/claude-sonnet-5"
-    api_key: CLAUDE
+    model: "gemini/gemini-3.1-flash-lite"
+    api_key: GEMINI
     max_tokens: 8000
     type: "generator"
 
   generator_llm_thinker:  # every agent's fallback when its primary call fails
-    model: "claude/claude-sonnet-5"
-    api_key: CLAUDE
+    model: "gemini/gemini-3.1-flash-lite"
+    api_key: GEMINI
     max_tokens: 16000
     type: "generator"
 
   judger_agent_1:  # the review comes from a stronger model than the work it is reviewing
-    model: "claude/claude-opus-5"
-    api_key: CLAUDE
+    model: "gemini/gemini-3.1-flash-lite"
+    api_key: GEMINI
     max_tokens: 16000
     type: "judger"
 

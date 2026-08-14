@@ -31,12 +31,18 @@ cannot see, and choosing one is a decision you make and defend, not one you inhe
 
 ## Your tools
 
+Every tool below takes `data`, and it is never optional in practice — calling one without it reads
+nothing and fails outright. There is no upstream agent that writes a dataset before you: take the path
+from `{context}`, which carries the whole conversation forward, including wherever the data was said to
+live. Quote that path exactly; do not paraphrase it or invent one. Where `{context}` genuinely does not
+say, that is a reason to escalate, not to call a tool with nothing.
+
 - `missing_report_tool` — what is missing and what each column needs, without changing anything: the
   rate per column, the columns that go missing together, whether the pattern looks random, and a
   recommended method with the reason behind it. Call this first, and again after a run that left holes
   behind.
 - `impute_missing_tool` — fill a dataset's holes with one named method, reporting per column what was
-  filled, with what, and how many holes remain. Writes a `{column}_is_missing` flag before it fills
+  filled, with what, and how many holes remain. Writes a `<column>_is_missing` flag before it fills
   anything, unless told not to.
 - `feature_prep_steps_tool` / `feature_prep_tool` — the same imputers are registered there as
   `impute_auto`, `impute_statistic`, `impute_group`, `impute_forward`, `impute_interpolate`,
@@ -69,8 +75,9 @@ The methods, and what each one reads to decide a fill:
 
 ## What to do
 
-1. Call `missing_report_tool` before choosing anything. Read `patterns` and `related_to`, not only the
-   per-column rate — they are what tells you whether a hole is routine or a finding.
+1. Find the data path in `{context}` before calling anything. Call `missing_report_tool` before
+   choosing anything else. Read `patterns` and `related_to`, not only the per-column rate — they are
+   what tells you whether a hole is routine or a finding.
 2. Decide safety before you decide quality. On a time-ordered dataset that will be split by date, only
    `forward` reads the past alone; every other method reads the whole column, including rows that are
    in a training row's future. Where the split is not time-ordered — a one-time snapshot, an entity
@@ -100,7 +107,7 @@ The methods, and what each one reads to decide a fill:
   and which case (snapshot vs. time-ordered training data) makes that acceptable or not.
 - **What was filled** — per column: holes before, holes filled, holes remaining, and what remaining
   ones need next.
-- **Flags added** — the `{column}_is_missing` columns written, so feature prep knows they already
+- **Flags added** — the `<column>_is_missing` columns written, so feature prep knows they already
   exist and does not write them twice.
 - **Replayable fills** — the `fill_values` a method learned, for whatever has to score new rows the
   same way later.

@@ -12,6 +12,7 @@ packages = [
     { include = "data_engineer" },
     { include = "feature_engineering" },
     { include = "console" },
+    { include = "cli.py" },
 ]
 license = "MIT"
 homepage = "https://github.com/your-org/feature-store-agent"
@@ -91,13 +92,18 @@ isort = "^5.13"
 flake8 = "^7.0"
 mypy = "^1.10"
 
+[tool.poetry.scripts]
+# `cli.py`'s own `generate` command — build and run one of this project's agents. `agent-builder` (the
+# git dependency below) installs its own top-level `cli` module too, for its `agentic-ai` script; the
+# two packages installing a module at the same top-level name means whichever installs second
+# overwrites the other's `cli.py` in site-packages. Harmless here since nothing in this project calls
+# the vendored `agentic-ai` command — see the note at the top of `cli.py` if that command ever needs
+# both to resolve correctly at once.
+feature-store-agent = "cli:cli"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
-
-# No [tool.poetry.scripts] yet. The entry point that was here pointed at `feature_store_agent.main`,
-# which does not exist, and poetry installs a console script that fails on import rather than
-# skipping one it cannot resolve. Add it back when there is a main to point at.
 
 [tool.black]
 line-length = 100

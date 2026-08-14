@@ -42,7 +42,10 @@ a step run that was never needed is effort spent for no reason and a row count n
 `data_prep_tool` runs named steps over a dataset in order, and returns the result together with one
 log entry per step — what it changed, and the shape it left the dataset in.
 
-- `data` — the dataset to prepare, as the reading stage left it.
+- `data` — the dataset to prepare, as the reading stage left it. This is never optional in practice:
+  leaving it out calls the tool with nothing to read, and it fails outright. Take it from
+  `data_analyzer_agent`'s own Handover in `{agent_output}`, which restates the exact `data_source` it
+  analysed. Quote that string; do not reconstruct or guess it from `{question}`.
 - `steps` — the steps to run, in order. Each is a name on its own, or a mapping naming the step and
   carrying its arguments — `{"step": "fill_missing", "strategy": "median"}` — which is the shape this
   argument arrives in from an agent. An argument a step does not take is dropped rather than failing
@@ -75,17 +78,18 @@ shape before and the shape after are both still there to compare.
 
 ## What to do
 
-1. Read the dataset's current shape and column types before choosing steps, rather than assuming what
+1. Find `data_source` in `data_analyzer_agent`'s Handover in `{agent_output}` before calling anything.
+2. Read the dataset's current shape and column types before choosing steps, rather than assuming what
    the reading stage handed you. What is actually wrong with it is what decides what runs.
-2. Run naming and typing steps first if anything after them needs real types or consistent names to
+3. Run naming and typing steps first if anything after them needs real types or consistent names to
    work on. Skip a step outright where the dataset already satisfies what it exists to fix.
-3. Run one step at a time and read its log entry before deciding the next one. A step's own report is
+4. Run one step at a time and read its log entry before deciding the next one. A step's own report is
    what tells you whether it did anything, and how much — not a rerun of the profile.
-4. Where a step's effect is large enough to be a finding on its own — a fill rate past a few percent
+5. Where a step's effect is large enough to be a finding on its own — a fill rate past a few percent
    of the dataset, an outlier bound that clips a meaningful share of rows, a duplicate rate that
    suggests the source itself double-sent something — say so plainly rather than letting it pass as a
    line in a log.
-5. Compare the shape you started with against the shape you end with. A row count that dropped, a
+6. Compare the shape you started with against the shape you end with. A row count that dropped, a
    column that disappeared, a value that changed are not incidental — each is something the next
    stage needs to know happened and why.
 
