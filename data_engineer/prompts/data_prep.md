@@ -43,17 +43,19 @@ a step run that was never needed is effort spent for no reason and a row count n
 log entry per step — what it changed, and the shape it left the dataset in.
 
 - `data` — the dataset to prepare, as the reading stage left it. This is never optional in practice:
-  leaving it out calls the tool with nothing to read, and it fails outright. Take it from
-  `data_analyzer_agent`'s own Handover in `{agent_output}`, which restates the exact `data_source` it
-  analysed. Quote that string; do not reconstruct or guess it from `{question}`.
+  leaving it out calls the tool with nothing to read, and it fails outright. Take it from the
+  `Current data path:` line in `{context}` — always present and the most reliable source.
+  Cross-check it against `data_analyzer_agent`'s own Handover in `{agent_output}`, which restates the
+  exact `data_source` it analysed, but where the two disagree, `{context}`'s current path wins. Quote
+  it exactly; do not reconstruct or guess it from `{question}`.
 - `steps` — the steps to run, in order. Each is a name on its own, or a mapping naming the step and
   carrying its arguments — `{"step": "fill_missing", "strategy": "median"}` — which is the shape this
   argument arrives in from an agent. An argument a step does not take is dropped rather than failing
   the run, so one call can carry the arguments for several steps at once.
 - `options` — per-step arguments, where they are not already inline in `steps`: `strategy` and `value`
   for `fill_missing`; `method` and `factor` for `clip_outliers`; `max_missing_rate` for
-  `drop_missing_columns`; `subset` for `drop_duplicates` and `drop_missing_rows`; `schema` for
-  `coerce_types`; `lowercase` for `normalize_columns`.
+  `drop_missing_columns`; `columns` for `drop_columns`; `subset` for `drop_duplicates` and
+  `drop_missing_rows`; `schema` for `coerce_types`; `lowercase` for `normalize_columns`.
 
 What it can run, in the order worth running them:
 
@@ -65,7 +67,10 @@ What it can run, in the order worth running them:
 - **Missing values** — `fill_missing` (a strategy per column: median, mean, mode, a constant, or
   `"auto"`, which picks per column from its type), `drop_missing_columns` (a column missing past
   `max_missing_rate` of its rows, dropped rather than filled).
-- **Shape** — `drop_constant_columns` (a column with one distinct value, which carries no signal).
+- **Shape** — `drop_constant_columns` (a column with one distinct value, which carries no signal),
+  `drop_columns` (specific columns by name — `columns` — regardless of what they contain: an id, a
+  column the request put out of scope, one a leakage check already flagged. `drop_missing_columns` and
+  `drop_constant_columns` decide from a column's values; this is for one that has to go regardless).
 - **Scale** — `clip_outliers` (values past a bound — IQR or z-score, by `method` — capped rather than
   dropped, so no row is lost).
 - **Derived columns** — `transform` (a transformed copy of a numeric column added beside the
@@ -78,7 +83,7 @@ shape before and the shape after are both still there to compare.
 
 ## What to do
 
-1. Find `data_source` in `data_analyzer_agent`'s Handover in `{agent_output}` before calling anything.
+1. Find `data_source` in the `Current data path:` line in `{context}` before calling anything.
 2. Read the dataset's current shape and column types before choosing steps, rather than assuming what
    the reading stage handed you. What is actually wrong with it is what decides what runs.
 3. Run naming and typing steps first if anything after them needs real types or consistent names to

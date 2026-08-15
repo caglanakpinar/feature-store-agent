@@ -72,17 +72,46 @@ FeatureSelector.run(question="select the features worth keeping", agent_outputs=
 poetry install
 ```
 
-Every LLM in this repo currently runs on Gemini (`gemini-3.1-flash-lite`), so you need:
+Every LLM in this repo currently runs on Gemini (`gemini-3.1-flash-lite`), configured under `llms:` in
+each of the three configs below, so out of the box you need:
 
 ```bash
 export GEMINI=<your Gemini API key>
 ```
 
-Gemini has no native tool-calling in `agent-builder`, so tool-bearing agents run through a manual
-prompted tool loop instead (`console/run.py`'s `run_with_prompted_tools`) — real tool execution, just
-driven by a `TOOL_CALL: {...}` text convention rather than the provider's own function-calling API.
-Switching an agent's `llm:` to a Claude entry in its `agentic_configurations.yaml` gets you the
-provider's native round trip instead; that needs `export CLAUDE=<your Anthropic API key>`.
+### Using a different model
+
+Each `llms:` entry sets a `model: "<provider>/<model-id>"` and an `api_key: <ENV_VAR_NAME>` — change
+either to change what that entry calls. The provider has to be one `agent-builder` actually implements
+a caller for:
+
+| Provider | `model:` prefix | Native tool-calling |
+|---|---|---|
+| Anthropic (Claude) | `claude/` or `anthropic/` | ✅ |
+| OpenAI | `openai/` | ✅ |
+| xAI (Grok) | `grok/` or `xai/` | ✅ |
+| Ollama (local) | `ollama/` | ✅ |
+| Mistral | `mistral/` | ✅ |
+| Hugging Face Inference | `huggingface/` or `hf/` | ✅ |
+| Google (Gemini) | `google/` or `gemini/` | ❌ — see below |
+
+Every `llms:` block lives in one of these three files — update whichever agents you want on a
+different model:
+
+- [`console/agentic_configurations.yaml`](console/agentic_configurations.yaml) — `chat_agent`,
+  `requirement_agent`
+- [`data_engineer/agentic_configurations.yaml`](data_engineer/agentic_configurations.yaml) —
+  `data_reader_agent`, `data_analyzer_agent`, `data_preprocessor_agent`, `data_quality_agent`
+- [`feature_engineering/agentic_configurations.yaml`](feature_engineering/agentic_configurations.yaml)
+  — `problem_analyzer_agent`, `missing_value_agent`, `feature_prep_agent`, `feature_selection_agent`
+
+Then export whatever `api_key:` names for the entries you changed — `CLAUDE`, `OPENAI`, `MISTRAL`,
+however you name the variable — alongside or instead of `GEMINI`.
+
+Gemini has no native tool-calling in `agent-builder`, so tool-bearing agents on a `google`/`gemini`
+entry run through a manual prompted tool loop instead (`console/run.py`'s `run_with_prompted_tools`) —
+real tool execution, just driven by a `TOOL_CALL: {...}` text convention rather than the provider's own
+function-calling API. Every other provider in the table above gets the native round trip for free.
 
 Some readers need extra dependencies:
 

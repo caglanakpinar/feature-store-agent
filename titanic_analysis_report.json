@@ -1,0 +1,1128 @@
+{
+  "source": "data/titanic/train.csv",
+  "rows": 891,
+  "columns": 12,
+  "analyses": [
+    {
+      "analysis": "describe",
+      "summary": "12 columns over 891 rows: 1 boolean, 4 categorical, 6 numeric, 1 text.",
+      "details": {
+        "row_count": 891,
+        "kinds": {
+          "PassengerId": "numeric",
+          "Survived": "boolean",
+          "Pclass": "numeric",
+          "Name": "text",
+          "Sex": "categorical",
+          "Age": "numeric",
+          "SibSp": "numeric",
+          "Parch": "numeric",
+          "Ticket": "categorical",
+          "Fare": "numeric",
+          "Cabin": "categorical",
+          "Embarked": "categorical"
+        },
+        "columns": {
+          "PassengerId": {
+            "kind": "numeric",
+            "count": 891,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 891,
+            "mean": 446.0,
+            "std": 257.353842,
+            "min": 1.0,
+            "p25": 223.5,
+            "median": 446.0,
+            "p75": 668.5,
+            "max": 891.0,
+            "sum": 397386.0,
+            "zeros": 0,
+            "negatives": 0,
+            "skew": 0.0
+          },
+          "Survived": {
+            "kind": "boolean",
+            "count": 891,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 2,
+            "mean": 0.383838,
+            "std": 0.486592,
+            "min": 0.0,
+            "p25": 0.0,
+            "median": 0.0,
+            "p75": 1.0,
+            "max": 1.0,
+            "sum": 342.0,
+            "zeros": 549,
+            "negatives": 0,
+            "skew": 0.477717
+          },
+          "Pclass": {
+            "kind": "numeric",
+            "count": 891,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 3,
+            "mean": 2.308642,
+            "std": 0.836071,
+            "min": 1.0,
+            "p25": 2.0,
+            "median": 3.0,
+            "p75": 3.0,
+            "max": 3.0,
+            "sum": 2057.0,
+            "zeros": 0,
+            "negatives": 0,
+            "skew": -0.629486
+          },
+          "Name": {
+            "kind": "text",
+            "count": 891,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 891,
+            "top": [
+              {
+                "value": "Abbing, Mr. Anthony",
+                "count": 1,
+                "share": 0.001122
+              },
+              {
+                "value": "Abbott, Mr. Rossmore Edward",
+                "count": 1,
+                "share": 0.001122
+              },
+              {
+                "value": "Abbott, Mrs. Stanton (Rosa Hunt)",
+                "count": 1,
+                "share": 0.001122
+              },
+              {
+                "value": "Abelson, Mr. Samuel",
+                "count": 1,
+                "share": 0.001122
+              },
+              {
+                "value": "Abelson, Mrs. Samuel (Hannah Wizosky)",
+                "count": 1,
+                "share": 0.001122
+              }
+            ],
+            "longest": 82
+          },
+          "Sex": {
+            "kind": "categorical",
+            "count": 891,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 2,
+            "top": [
+              {
+                "value": "male",
+                "count": 577,
+                "share": 0.647587
+              },
+              {
+                "value": "female",
+                "count": 314,
+                "share": 0.352413
+              }
+            ],
+            "longest": 6
+          },
+          "Age": {
+            "kind": "numeric",
+            "count": 714,
+            "missing": 177,
+            "missing_rate": 0.198653,
+            "distinct": 88,
+            "mean": 29.699118,
+            "std": 14.526497,
+            "min": 0.42,
+            "p25": 20.125,
+            "median": 28.0,
+            "p75": 38.0,
+            "max": 80.0,
+            "sum": 21205.17,
+            "zeros": 0,
+            "negatives": 0,
+            "skew": 0.38829
+          },
+          "SibSp": {
+            "kind": "numeric",
+            "count": 891,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 7,
+            "mean": 0.523008,
+            "std": 1.102743,
+            "min": 0.0,
+            "p25": 0.0,
+            "median": 0.0,
+            "p75": 1.0,
+            "max": 8.0,
+            "sum": 466.0,
+            "zeros": 608,
+            "negatives": 0,
+            "skew": 3.689128
+          },
+          "Parch": {
+            "kind": "numeric",
+            "count": 891,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 7,
+            "mean": 0.381594,
+            "std": 0.806057,
+            "min": 0.0,
+            "p25": 0.0,
+            "median": 0.0,
+            "p75": 0.0,
+            "max": 6.0,
+            "sum": 340.0,
+            "zeros": 678,
+            "negatives": 0,
+            "skew": 2.744487
+          },
+          "Ticket": {
+            "kind": "categorical",
+            "count": 891,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 681,
+            "top": [
+              {
+                "value": 1601,
+                "count": 7,
+                "share": 0.007856
+              },
+              {
+                "value": 347082,
+                "count": 7,
+                "share": 0.007856
+              },
+              {
+                "value": "CA. 2343",
+                "count": 7,
+                "share": 0.007856
+              },
+              {
+                "value": 3101295,
+                "count": 6,
+                "share": 0.006734
+              },
+              {
+                "value": 347088,
+                "count": 6,
+                "share": 0.006734
+              }
+            ],
+            "longest": 18
+          },
+          "Fare": {
+            "kind": "numeric",
+            "count": 891,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 248,
+            "mean": 32.204208,
+            "std": 49.693429,
+            "min": 0.0,
+            "p25": 7.9104,
+            "median": 14.4542,
+            "p75": 31.0,
+            "max": 512.3292,
+            "sum": 28693.9493,
+            "zeros": 15,
+            "negatives": 0,
+            "skew": 4.779253
+          },
+          "Cabin": {
+            "kind": "categorical",
+            "count": 204,
+            "missing": 687,
+            "missing_rate": 0.771044,
+            "distinct": 147,
+            "top": [
+              {
+                "value": "B96 B98",
+                "count": 4,
+                "share": 0.019608
+              },
+              {
+                "value": "C23 C25 C27",
+                "count": 4,
+                "share": 0.019608
+              },
+              {
+                "value": "G6",
+                "count": 4,
+                "share": 0.019608
+              },
+              {
+                "value": "C22 C26",
+                "count": 3,
+                "share": 0.014706
+              },
+              {
+                "value": "D",
+                "count": 3,
+                "share": 0.014706
+              }
+            ],
+            "longest": 15
+          },
+          "Embarked": {
+            "kind": "categorical",
+            "count": 889,
+            "missing": 2,
+            "missing_rate": 0.002245,
+            "distinct": 3,
+            "top": [
+              {
+                "value": "S",
+                "count": 644,
+                "share": 0.724409
+              },
+              {
+                "value": "C",
+                "count": 168,
+                "share": 0.188976
+              },
+              {
+                "value": "Q",
+                "count": 77,
+                "share": 0.086614
+              }
+            ],
+            "longest": 1
+          }
+        }
+      },
+      "findings": []
+    },
+    {
+      "analysis": "missing_values",
+      "summary": "3 of 12 columns hold missing values; 20.5% of rows are complete.",
+      "details": {
+        "columns": {
+          "Age": {
+            "missing": 177,
+            "rate": 0.198653
+          },
+          "Cabin": {
+            "missing": 687,
+            "rate": 0.771044
+          },
+          "Embarked": {
+            "missing": 2,
+            "rate": 0.002245
+          }
+        },
+        "complete_rows": 183,
+        "complete_rate": 0.205387,
+        "max_missing_rate": 0.5,
+        "patterns": [
+          {
+            "columns": [
+              "Cabin"
+            ],
+            "rows": 529,
+            "share": 0.593715
+          },
+          {
+            "columns": [
+              "Age",
+              "Cabin"
+            ],
+            "rows": 158,
+            "share": 0.177329
+          },
+          {
+            "columns": [
+              "Age"
+            ],
+            "rows": 19,
+            "share": 0.021324
+          }
+        ]
+      },
+      "findings": [
+        {
+          "level": "warning",
+          "message": "Cabin: more than 50% missing, so a feature built on that carries the imputation rather than the data."
+        },
+        {
+          "level": "info",
+          "message": "2 column(s) hold some missing values, worst Age at 19.9%; fill_missing decides them, missing_indicators keeps the fact that they were missing."
+        }
+      ]
+    },
+    {
+      "analysis": "duplicates",
+      "summary": "0 duplicate row(s) (0.0%); 1 key column(s) checked.",
+      "details": {
+        "duplicate_rows": 0,
+        "duplicate_rate": 0.0,
+        "unique_rows": 891,
+        "subset": [
+          "PassengerId",
+          "Survived",
+          "Pclass",
+          "Name",
+          "Sex",
+          "Age",
+          "SibSp",
+          "Parch",
+          "Ticket",
+          "Fare",
+          "Cabin",
+          "Embarked"
+        ],
+        "keys": {
+          "Name": {
+            "distinct": 891,
+            "duplicated": 0,
+            "max_repeats": 1,
+            "examples": []
+          }
+        }
+      },
+      "findings": []
+    },
+    {
+      "analysis": "outliers",
+      "summary": "173 outlying value(s) across 5 numeric column(s), by iqr at 1.5.",
+      "details": {
+        "method": "iqr",
+        "factor": 1.5,
+        "columns": {
+          "PassengerId": {
+            "lower": -444.0,
+            "upper": 1336.0,
+            "below": 0,
+            "above": 0,
+            "outliers": 0,
+            "rate": 0.0,
+            "min": 1.0,
+            "max": 891.0
+          },
+          "Pclass": {
+            "lower": 0.5,
+            "upper": 4.5,
+            "below": 0,
+            "above": 0,
+            "outliers": 0,
+            "rate": 0.0,
+            "min": 1.0,
+            "max": 3.0
+          },
+          "Age": {
+            "lower": -6.6875,
+            "upper": 64.8125,
+            "below": 0,
+            "above": 11,
+            "outliers": 11,
+            "rate": 0.015406,
+            "min": 0.42,
+            "max": 80.0
+          },
+          "SibSp": {
+            "lower": -1.5,
+            "upper": 2.5,
+            "below": 0,
+            "above": 46,
+            "outliers": 46,
+            "rate": 0.051627,
+            "min": 0.0,
+            "max": 8.0
+          },
+          "Fare": {
+            "lower": -26.724,
+            "upper": 65.6344,
+            "below": 0,
+            "above": 116,
+            "outliers": 116,
+            "rate": 0.130191,
+            "min": 0.0,
+            "max": 512.3292
+          }
+        },
+        "skipped": [
+          "Parch"
+        ]
+      },
+      "findings": [
+        {
+          "level": "warning",
+          "message": "Fare, SibSp: more than 5% outlying values \u2014 a transform (log, bucket) fits that better than clipping, which would move a twentieth of the column."
+        },
+        {
+          "level": "info",
+          "message": "Age: a few extreme values; clip_outliers holds them in."
+        }
+      ]
+    },
+    {
+      "analysis": "distributions",
+      "summary": "7 numeric column(s) profiled; 3 skewed beyond 1.",
+      "details": {
+        "columns": {
+          "PassengerId": {
+            "shape": "continuous",
+            "skew": 0.0,
+            "kurtosis": -1.200003,
+            "zeros": 0,
+            "negatives": 0,
+            "distinct": 891,
+            "suggested_transform": null,
+            "histogram": {
+              "edges": [
+                1.0,
+                90.0,
+                179.0,
+                268.0,
+                357.0,
+                446.0,
+                535.0,
+                624.0,
+                713.0,
+                802.0,
+                891.0
+              ],
+              "counts": [
+                89,
+                89,
+                89,
+                89,
+                89,
+                89,
+                89,
+                89,
+                89,
+                90
+              ]
+            }
+          },
+          "Survived": {
+            "shape": "binary",
+            "skew": 0.477717,
+            "kurtosis": -1.771786,
+            "zeros": 549,
+            "negatives": 0,
+            "distinct": 2,
+            "suggested_transform": null,
+            "histogram": {
+              "edges": [
+                0.0,
+                0.1,
+                0.2,
+                0.3,
+                0.4,
+                0.5,
+                0.6,
+                0.7,
+                0.8,
+                0.9,
+                1.0
+              ],
+              "counts": [
+                549,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                342
+              ]
+            }
+          },
+          "Pclass": {
+            "shape": "discrete",
+            "skew": -0.629486,
+            "kurtosis": -1.27957,
+            "zeros": 0,
+            "negatives": 0,
+            "distinct": 3,
+            "suggested_transform": null,
+            "histogram": {
+              "edges": [
+                1.0,
+                1.2,
+                1.4,
+                1.6,
+                1.8,
+                2.0,
+                2.2,
+                2.4,
+                2.6,
+                2.8,
+                3.0
+              ],
+              "counts": [
+                216,
+                0,
+                0,
+                0,
+                0,
+                184,
+                0,
+                0,
+                0,
+                491
+              ]
+            }
+          },
+          "Age": {
+            "shape": "continuous",
+            "skew": 0.38829,
+            "kurtosis": 0.168637,
+            "zeros": 0,
+            "negatives": 0,
+            "distinct": 88,
+            "suggested_transform": null,
+            "histogram": {
+              "edges": [
+                0.42,
+                8.378,
+                16.336,
+                24.294,
+                32.252,
+                40.21,
+                48.168,
+                56.126,
+                64.084,
+                72.042,
+                80.0
+              ],
+              "counts": [
+                54,
+                46,
+                177,
+                169,
+                118,
+                70,
+                45,
+                24,
+                9,
+                2
+              ]
+            }
+          },
+          "SibSp": {
+            "shape": "discrete",
+            "skew": 3.689128,
+            "kurtosis": 17.773512,
+            "zeros": 608,
+            "negatives": 0,
+            "distinct": 7,
+            "suggested_transform": "binning",
+            "histogram": {
+              "edges": [
+                0.0,
+                0.8,
+                1.6,
+                2.4,
+                3.2,
+                4.0,
+                4.8,
+                5.6,
+                6.4,
+                7.2,
+                8.0
+              ],
+              "counts": [
+                608,
+                209,
+                28,
+                16,
+                0,
+                18,
+                5,
+                0,
+                0,
+                7
+              ]
+            }
+          },
+          "Parch": {
+            "shape": "discrete",
+            "skew": 2.744487,
+            "kurtosis": 9.716613,
+            "zeros": 678,
+            "negatives": 0,
+            "distinct": 7,
+            "suggested_transform": "binning",
+            "histogram": {
+              "edges": [
+                0.0,
+                0.6,
+                1.2,
+                1.8,
+                2.4,
+                3.0,
+                3.6,
+                4.2,
+                4.8,
+                5.4,
+                6.0
+              ],
+              "counts": [
+                678,
+                118,
+                0,
+                80,
+                0,
+                5,
+                4,
+                0,
+                5,
+                1
+              ]
+            }
+          },
+          "Fare": {
+            "shape": "continuous",
+            "skew": 4.779253,
+            "kurtosis": 33.204289,
+            "zeros": 15,
+            "negatives": 0,
+            "distinct": 248,
+            "suggested_transform": "binning",
+            "histogram": {
+              "edges": [
+                0.0,
+                51.23292,
+                102.46584,
+                153.69876,
+                204.93168,
+                256.1646,
+                307.39752,
+                358.63044,
+                409.86336,
+                461.09628,
+                512.3292
+              ],
+              "counts": [
+                732,
+                106,
+                31,
+                2,
+                11,
+                6,
+                0,
+                0,
+                0,
+                3
+              ]
+            }
+          }
+        },
+        "skewed": [
+          "SibSp",
+          "Parch",
+          "Fare"
+        ]
+      },
+      "findings": [
+        {
+          "level": "info",
+          "message": "SibSp, Parch, Fare: skewed \u2014 feature prep's math_transformations (log1p) or binning gives a model the body of the column rather than its tail."
+        }
+      ]
+    },
+    {
+      "analysis": "correlations",
+      "summary": "21 numeric pair(s) measured by pearson; 0 above |r| 0.95.",
+      "details": {
+        "method": "pearson",
+        "columns": [
+          "PassengerId",
+          "Survived",
+          "Pclass",
+          "Age",
+          "SibSp",
+          "Parch",
+          "Fare"
+        ],
+        "strongest": [
+          {
+            "columns": [
+              "Pclass",
+              "Fare"
+            ],
+            "r": -0.5495
+          },
+          {
+            "columns": [
+              "SibSp",
+              "Parch"
+            ],
+            "r": 0.414838
+          },
+          {
+            "columns": [
+              "Pclass",
+              "Age"
+            ],
+            "r": -0.369226
+          },
+          {
+            "columns": [
+              "Survived",
+              "Pclass"
+            ],
+            "r": -0.338481
+          },
+          {
+            "columns": [
+              "Age",
+              "SibSp"
+            ],
+            "r": -0.308247
+          },
+          {
+            "columns": [
+              "Survived",
+              "Fare"
+            ],
+            "r": 0.257307
+          },
+          {
+            "columns": [
+              "Parch",
+              "Fare"
+            ],
+            "r": 0.216225
+          },
+          {
+            "columns": [
+              "Age",
+              "Parch"
+            ],
+            "r": -0.189119
+          },
+          {
+            "columns": [
+              "SibSp",
+              "Fare"
+            ],
+            "r": 0.159651
+          },
+          {
+            "columns": [
+              "Age",
+              "Fare"
+            ],
+            "r": 0.096067
+          }
+        ],
+        "redundant": []
+      },
+      "findings": []
+    },
+    {
+      "analysis": "target_summary",
+      "summary": "Survived is binary, positive in 38.4% of rows; 0 row(s) missing it.",
+      "details": {
+        "target": "Survived",
+        "kind": "binary",
+        "missing": 0,
+        "positive_class": 1,
+        "positive_rate": 0.383838,
+        "classes": [
+          {
+            "value": 0,
+            "rows": 549,
+            "share": 0.616162
+          },
+          {
+            "value": 1,
+            "rows": 342,
+            "share": 0.383838
+          }
+        ],
+        "associations": [
+          {
+            "column": "Cabin",
+            "measure": "correlation_ratio",
+            "value": 0.889068,
+            "association": 0.889068
+          },
+          {
+            "column": "Sex",
+            "measure": "correlation_ratio",
+            "value": 0.543351,
+            "association": 0.543351
+          },
+          {
+            "column": "Pclass",
+            "measure": "correlation",
+            "value": -0.338481,
+            "association": 0.338481
+          },
+          {
+            "column": "Fare",
+            "measure": "correlation",
+            "value": 0.257307,
+            "association": 0.257307
+          },
+          {
+            "column": "Embarked",
+            "measure": "correlation_ratio",
+            "value": 0.172617,
+            "association": 0.172617
+          },
+          {
+            "column": "Parch",
+            "measure": "correlation",
+            "value": 0.081629,
+            "association": 0.081629
+          },
+          {
+            "column": "Age",
+            "measure": "correlation",
+            "value": -0.077221,
+            "association": 0.077221
+          },
+          {
+            "column": "SibSp",
+            "measure": "correlation",
+            "value": -0.035322,
+            "association": 0.035322
+          },
+          {
+            "column": "PassengerId",
+            "measure": "correlation",
+            "value": -0.005007,
+            "association": 0.005007
+          }
+        ]
+      },
+      "findings": []
+    },
+    {
+      "analysis": "timeline",
+      "summary": "no date columns were found.",
+      "details": {
+        "reference_date": "2026-08-15T15:22:25.287067",
+        "columns": {}
+      },
+      "findings": []
+    },
+    {
+      "analysis": "grain",
+      "summary": "one row per entity: 891 entities over 891 rows (1.00 rows each on average).",
+      "details": {
+        "rows": 891,
+        "id_columns": [
+          "PassengerId"
+        ],
+        "date_columns": [],
+        "entities": 891,
+        "verdict": "one row per entity",
+        "rows_per_entity": {
+          "mean": 1.0,
+          "median": 1,
+          "max": 1,
+          "entities_with_repeats": 0
+        },
+        "entity_span_days": null
+      },
+      "findings": [
+        {
+          "level": "info",
+          "message": "the data is already one row per PassengerId; per-entity aggregation would add nothing, so feature prep should work the measurements themselves."
+        }
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "analysis": "missing_values",
+      "level": "warning",
+      "message": "Cabin: more than 50% missing, so a feature built on that carries the imputation rather than the data."
+    },
+    {
+      "analysis": "outliers",
+      "level": "warning",
+      "message": "Fare, SibSp: more than 5% outlying values \u2014 a transform (log, bucket) fits that better than clipping, which would move a twentieth of the column."
+    },
+    {
+      "analysis": "missing_values",
+      "level": "info",
+      "message": "2 column(s) hold some missing values, worst Age at 19.9%; fill_missing decides them, missing_indicators keeps the fact that they were missing."
+    },
+    {
+      "analysis": "outliers",
+      "level": "info",
+      "message": "Age: a few extreme values; clip_outliers holds them in."
+    },
+    {
+      "analysis": "distributions",
+      "level": "info",
+      "message": "SibSp, Parch, Fare: skewed \u2014 feature prep's math_transformations (log1p) or binning gives a model the body of the column rather than its tail."
+    },
+    {
+      "analysis": "grain",
+      "level": "info",
+      "message": "the data is already one row per PassengerId; per-entity aggregation would add nothing, so feature prep should work the measurements themselves."
+    }
+  ],
+  "summary_text": "Analysis of data/titanic/train.csv \u2014 891 rows, 12 columns.\n\ndescribe: 12 columns over 891 rows: 1 boolean, 4 categorical, 6 numeric, 1 text.\nmissing_values: 3 of 12 columns hold missing values; 20.5% of rows are complete.\nduplicates: 0 duplicate row(s) (0.0%); 1 key column(s) checked.\noutliers: 173 outlying value(s) across 5 numeric column(s), by iqr at 1.5.\ndistributions: 7 numeric column(s) profiled; 3 skewed beyond 1.\ncorrelations: 21 numeric pair(s) measured by pearson; 0 above |r| 0.95.\ntarget_summary: Survived is binary, positive in 38.4% of rows; 0 row(s) missing it.\ntimeline: no date columns were found.\ngrain: one row per entity: 891 entities over 891 rows (1.00 rows each on average).\n\nFindings\n- warning [missing_values] Cabin: more than 50% missing, so a feature built on that carries the imputation rather than the data.\n- warning [outliers] Fare, SibSp: more than 5% outlying values \u2014 a transform (log, bucket) fits that better than clipping, which would move a twentieth of the column.\n- info [missing_values] 2 column(s) hold some missing values, worst Age at 19.9%; fill_missing decides them, missing_indicators keeps the fact that they were missing.\n- info [outliers] Age: a few extreme values; clip_outliers holds them in.\n- info [distributions] SibSp, Parch, Fare: skewed \u2014 feature prep's math_transformations (log1p) or binning gives a model the body of the column rather than its tail.\n- info [grain] the data is already one row per PassengerId; per-entity aggregation would add nothing, so feature prep should work the measurements themselves.",
+  "recipe": {
+    "columns": {
+      "id_columns": [
+        "Name"
+      ],
+      "date_columns": [],
+      "aggregation_columns": [
+        "PassengerId",
+        "Pclass",
+        "Age",
+        "SibSp",
+        "Parch",
+        "Fare"
+      ],
+      "categorical_columns": [
+        "Sex",
+        "Ticket",
+        "Cabin",
+        "Embarked"
+      ],
+      "target": "Survived"
+    },
+    "cleaning": {
+      "caller": "data_engineer.tools.data_prep.prepare",
+      "steps": [
+        "normalize_columns",
+        "strip_whitespace",
+        {
+          "step": "drop_missing_columns",
+          "max_missing_rate": 0.5
+        },
+        {
+          "step": "fill_missing",
+          "strategy": "auto"
+        },
+        {
+          "step": "clip_outliers",
+          "columns": [
+            "Age"
+          ],
+          "method": "iqr"
+        }
+      ]
+    },
+    "feature_prep": {
+      "caller": "feature_engineer.tools.feature_prep.feature_prep_caller",
+      "level": "row",
+      "id_columns": [
+        "Name"
+      ],
+      "date_columns": [],
+      "aggregation_columns": [
+        "PassengerId",
+        "Pclass",
+        "Age",
+        "SibSp",
+        "Parch",
+        "Fare"
+      ],
+      "steps": [
+        "missing_indicators",
+        "frequency_encoding",
+        "rare_category_grouping",
+        "ordinal_encoding",
+        "math_transformations",
+        "binning",
+        "row_statistics",
+        "ratios"
+      ],
+      "options": {
+        "categorical_columns": [
+          "Sex",
+          "Ticket",
+          "Cabin",
+          "Embarked"
+        ],
+        "math_transformations": {
+          "operations": [
+            "log1p"
+          ]
+        }
+      }
+    },
+    "reasons": [
+      {
+        "step": "normalize_columns",
+        "why": "PassengerId, Survived, Pclass, Name, Sex and 7 other(s) are not usable as feature names."
+      },
+      {
+        "step": "strip_whitespace",
+        "why": "text columns split into levels when padding differs."
+      },
+      {
+        "step": "drop_missing_columns",
+        "why": "Cabin are more imputation than data."
+      },
+      {
+        "step": "fill_missing",
+        "why": "holes remain after the drops above; auto takes a median or a mode per column."
+      },
+      {
+        "step": "clip_outliers",
+        "why": "Age hold a few extreme values that would set the scale."
+      },
+      {
+        "step": "missing_indicators",
+        "why": "whether a field was filled in is itself predictive."
+      },
+      {
+        "step": "frequency_encoding",
+        "why": "one column per category, at any cardinality, no leakage."
+      },
+      {
+        "step": "rare_category_grouping",
+        "why": "Ticket, Cabin: levels rare enough to overfit."
+      },
+      {
+        "step": "ordinal_encoding",
+        "why": "too many levels for one column each."
+      },
+      {
+        "step": "math_transformations",
+        "why": "SibSp, Parch, Fare: skewed; log1p straightens them."
+      },
+      {
+        "step": "binning",
+        "why": "a heavy tail reads better as ordered bands than as a number."
+      },
+      {
+        "step": "row_statistics",
+        "why": "several comparable measurements per row summarise usefully."
+      },
+      {
+        "step": "ratios",
+        "why": "a ratio carries what neither of its two columns carries alone."
+      }
+    ],
+    "warnings": [
+      {
+        "analysis": "missing_values",
+        "level": "warning",
+        "message": "Cabin: more than 50% missing, so a feature built on that carries the imputation rather than the data."
+      },
+      {
+        "analysis": "outliers",
+        "level": "warning",
+        "message": "Fare, SibSp: more than 5% outlying values \u2014 a transform (log, bucket) fits that better than clipping, which would move a twentieth of the column."
+      }
+    ]
+  }
+}

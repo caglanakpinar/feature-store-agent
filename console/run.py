@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +48,7 @@ import click
 # agent's `llm:` entry names straight out of this module — so importing it again here costs nothing new.
 from models.llms import ToolFailure, as_tool_content
 
-from console.agentic import ChatAgent, RequirementAgent
+from console.agentic import ChatAgent, RequirementAgent, save_question
 from data_engineer.agents.workers import (
     DataAnalyzer,
     DataPreprocessor,
@@ -154,6 +155,30 @@ def escalation_envelope(output: str) -> tuple[bool, str] | None:
     return truthy(parsed["Escalation"]), str(parsed["output"])
 
 
+# A file-looking token (`customers.csv`, `data/titanic/train.csv`) or a `db://...`-style connection
+# string, wherever it turns up in an agent's own prose.
+PATH_PATTERN = re.compile(
+    r"(?:[\w./~-]+/)?[\w.-]+\.(?:csv|tsv|json|jsonl|parquet|pq|xlsx?|db)\b|\w+://[\w./:@-]+",
+    re.IGNORECASE,
+)
+
+
+def extract_path(text: str, fallback: str) -> str:
+    """The last file- or connection-looking token an agent's output mentions, or `fallback`.
+
+    Every prompt from `data_reader.md` on is told to restate the exact `data_source` it worked from —
+    that was supposed to be enough on its own, and in practice a faster, smaller model does not always
+    do it where the prompt expects, which is what actually sends `None` into a tool call. This is not
+    the fix for that: `run_pipeline` injects an explicit `Current data path:` fact into every agent's
+    context regardless, and this is what keeps that fact current — reading whatever new path an
+    approved agent's own text seems to report, so a later agent gets the cleaned file a preprocessing
+    step wrote rather than the original raw source, without needing to parse that out of prose either.
+    Best-effort only: `fallback` (the path already known) wins when nothing matches.
+    """
+    matches = PATH_PATTERN.findall(text)
+    return matches[-1] if matches else fallback
+
+
 def web_search(package: str, query: str, max_results: int = 5) -> str:
     """Search the web through `package`'s own cache, rendered as the block a prompt can read.
 
@@ -258,13 +283,44 @@ def parse_tool_call(text: str) -> tuple[str, dict[str, Any]] | None:
     return None
 
 
-def run_with_prompted_tools(agent: Any, prompt: str, max_rounds: int = PROMPTED_TOOL_ROUNDS) -> str:
+# The argument names a tool declares its dataset under — every tool in this project uses one or the
+# other. Checked in `with_known_data_path` against what a tool actually declares, not assumed present.
+DATA_ARGUMENT_NAMES = ("data_source", "data")
+
+
+def with_known_data_path(tool: Any, arguments: dict[str, Any], data_path: str) -> dict[str, Any]:
+    """Fill in a tool call's `data`/`data_source` argument from the pipeline's own known path, when the
+    model left it out or passed something falsy.
+
+    Every prompt in this project's `prompts/` is now explicit about where that path lives in
+    `{context}`, and it still is not enough on its own — a smaller, faster model omits it, or passes
+    `null`, often enough that this stopped being the rare case. This is the deterministic backstop:
+    not a request the model can decline, applied only when the tool actually declares one of
+    `DATA_ARGUMENT_NAMES` and `data_path` is itself known. It never overrides a value the model did
+    supply, even a wrong one — a wrong path is a different failure than no path, and still the model's
+    call to make.
+    """
+    if not data_path:
+        return arguments
+
+    properties = tool.declaration()["parameters"]["properties"]
+    filled = dict(arguments)
+    for name in DATA_ARGUMENT_NAMES:
+        if name in properties and not filled.get(name):
+            filled[name] = data_path
+    return filled
+
+
+def run_with_prompted_tools(
+    agent: Any, prompt: str, data_path: str = "", max_rounds: int = PROMPTED_TOOL_ROUNDS
+) -> str:
     """Drive the text-only tool loop described above until the model answers instead of asking for a tool.
 
     Bounded by `max_rounds` so a model that keeps asking for tools forever stops eventually, returning
     whatever it last said. `agent._generate` (not `.generate`) is used for each round: it is the one
     method that still gets the primary/substitute fallback without also trying `agent.llm`'s own (here,
-    nonexistent) native tool-use round trip.
+    nonexistent) native tool-use round trip. `data_path`, when given, is applied to every tool call via
+    `with_known_data_path` before it runs.
     """
     conversation = f"{prompt}\n\n---\n\n{tool_instructions(agent)}"
     text = ""
@@ -285,6 +341,10 @@ def run_with_prompted_tools(agent: Any, prompt: str, max_rounds: int = PROMPTED_
             continue
 
         name, arguments = call
+        tool = agent.toolbox.agent_tools.get(name)
+        if tool is not None:
+            arguments = with_known_data_path(tool, arguments, data_path)
+
         try:
             rendered = as_tool_content(agent.toolbox.call(name, arguments))
         except Exception as error:
@@ -305,6 +365,7 @@ def run_agent(
     context: str,
     agent_outputs: dict[str, str],
     prefix: str = "",
+    data_path: str = "",
 ) -> str:
     """Run one agent — through `.run()`, the same one-call interface `RequirementAgent`/`ChatAgent` use —
     prepending `prefix` ahead of its own prompt on a retry, and routing through `run_with_prompted_tools`
@@ -315,6 +376,11 @@ def run_agent(
     in that agent's prompt — not necessarily first. A rejection needs it first, so a retry builds the
     prompt itself instead of going through `.run()`. The empty-prompt guard runs either way, since
     neither `.run()` nor `run_with_prompted_tools` has one of its own.
+
+    `data_path`, when given, only reaches `run_with_prompted_tools` — the deterministic backstop that
+    fills a tool's `data`/`data_source` argument when the model leaves it out (see
+    `with_known_data_path`). The native tool-calling path (`.run()`/`.generate()`, for a Claude-backed
+    agent) has no such hook to apply it through; that path relies on the prompt alone.
     """
     agent = handle.build()
     prompt = agent.build_prompt(question, context, agent_outputs)
@@ -327,7 +393,7 @@ def run_agent(
     full_prompt = f"{prefix}\n\n{prompt}" if prefix else prompt
 
     if agent.toolbox and not getattr(agent.llm, "runs_tools", False):
-        return run_with_prompted_tools(agent, full_prompt)
+        return run_with_prompted_tools(agent, full_prompt, data_path)
 
     if not prefix:
         return agent.run(question, context, agent_outputs)
@@ -366,6 +432,9 @@ def run_pipeline(question: str, context: str, verdict: dict[str, Any]) -> bool:
     }
 
     problem = str(verdict.get("problem", ""))
+    # The path every agent is told about explicitly, alongside whatever `{agent_output}` says — see
+    # `extract_path`'s own docstring for why relying on prose alone was not holding up in practice.
+    current_path = str(verdict.get("data_details", ""))
 
     for stage, package, handles in STAGES:
         click.secho(f"\n=== {stage} ===", fg="cyan", bold=True)
@@ -374,8 +443,11 @@ def run_pipeline(question: str, context: str, verdict: dict[str, Any]) -> bool:
             prefix = ""
             while True:
                 click.secho(f"\n[{handle.NAME}] working...", fg="yellow")
+                agent_context = f"{context}\n\nCurrent data path: {current_path}"
                 try:
-                    output = run_agent(handle, question, context, agent_outputs, prefix)
+                    output = run_agent(
+                        handle, question, agent_context, agent_outputs, prefix, current_path
+                    )
                 except ValueError as error:
                     click.secho(f"{handle.NAME} could not run: {error}", fg="red")
                     return False
@@ -395,6 +467,7 @@ def run_pipeline(question: str, context: str, verdict: dict[str, Any]) -> bool:
                         return False
 
                     context = f"{context}\n\n{handle.NAME} asked:\n{text}\n\nAnswer: {answer}"
+                    current_path = extract_path(answer, current_path)
                     continue
 
                 verdict_given = approve(handle.NAME)
@@ -404,6 +477,7 @@ def run_pipeline(question: str, context: str, verdict: dict[str, Any]) -> bool:
 
                 if verdict_given:
                     agent_outputs[handle.NAME] = text
+                    current_path = extract_path(text, current_path)
                     break
 
                 # Its next turn goes deeper than exactly this attempt, with a search on its own topic.
@@ -429,6 +503,12 @@ def chat() -> None:
 
         transcript.append(f"User: {question}")
         context = "\n".join(transcript)
+
+        # Every new question is indexed into both packages' knowledge bases as it arrives, regardless
+        # of whether `rag_data_engineer_decider_agent`/`problem_analyzer_agent` are in "rag" mode yet —
+        # see `save_question`'s own docstring for why this is best-effort and never blocks the turn.
+        save_question("data_engineer", question)
+        save_question("feature_engineering", question)
 
         try:
             verdict = as_json(RequirementAgent.run(question=question, context=context))
