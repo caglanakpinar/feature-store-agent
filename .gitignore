@@ -101,3 +101,4 @@ data_engineer/dbs/*.py
 feature_engineering/dbs/*.py
 *.pyc
 data/
+scripts/

@@ -48,7 +48,8 @@ import click
 # agent's `llm:` entry names straight out of this module — so importing it again here costs nothing new.
 from models.llms import ToolFailure, as_tool_content
 
-from console.agentic import ChatAgent, RequirementAgent, save_question
+from console.agentic import ChatAgent, CodeGeneratorAgent, RequirementAgent, save_question
+from console.code_tracker import CodeTracker
 from data_engineer.agents.workers import (
     DataAnalyzer,
     DataPreprocessor,
@@ -312,7 +313,13 @@ def with_known_data_path(tool: Any, arguments: dict[str, Any], data_path: str) -
 
 
 def run_with_prompted_tools(
-    agent: Any, prompt: str, data_path: str = "", max_rounds: int = PROMPTED_TOOL_ROUNDS
+    agent: Any,
+    prompt: str,
+    data_path: str = "",
+    max_rounds: int = PROMPTED_TOOL_ROUNDS,
+    tracker: CodeTracker | None = None,
+    stage: str = "",
+    agent_name: str = "",
 ) -> str:
     """Drive the text-only tool loop described above until the model answers instead of asking for a tool.
 
@@ -321,6 +328,11 @@ def run_with_prompted_tools(
     method that still gets the primary/substitute fallback without also trying `agent.llm`'s own (here,
     nonexistent) native tool-use round trip. `data_path`, when given, is applied to every tool call via
     `with_known_data_path` before it runs.
+
+    `tracker`, when given, records every call that actually succeeds — see `console.code_tracker` for
+    why a failed call is not recorded: reproducing something that did not work is not the point of the
+    script this feeds. `stage` and `agent_name` are only there to label what gets recorded; this function
+    does not otherwise need to know its caller's position in the pipeline.
     """
     conversation = f"{prompt}\n\n---\n\n{tool_instructions(agent)}"
     text = ""
@@ -346,7 +358,10 @@ def run_with_prompted_tools(
             arguments = with_known_data_path(tool, arguments, data_path)
 
         try:
-            rendered = as_tool_content(agent.toolbox.call(name, arguments))
+            result = agent.toolbox.call(name, arguments)
+            if tool is not None and tracker is not None:
+                tracker.record(stage, agent_name, tool, arguments)
+            rendered = as_tool_content(result)
         except Exception as error:
             rendered = as_tool_content(ToolFailure(f"{type(error).__name__}: {error}"))
 
@@ -366,6 +381,8 @@ def run_agent(
     agent_outputs: dict[str, str],
     prefix: str = "",
     data_path: str = "",
+    tracker: CodeTracker | None = None,
+    stage: str = "",
 ) -> str:
     """Run one agent — through `.run()`, the same one-call interface `RequirementAgent`/`ChatAgent` use —
     prepending `prefix` ahead of its own prompt on a retry, and routing through `run_with_prompted_tools`
@@ -380,7 +397,9 @@ def run_agent(
     `data_path`, when given, only reaches `run_with_prompted_tools` — the deterministic backstop that
     fills a tool's `data`/`data_source` argument when the model leaves it out (see
     `with_known_data_path`). The native tool-calling path (`.run()`/`.generate()`, for a Claude-backed
-    agent) has no such hook to apply it through; that path relies on the prompt alone.
+    agent) has no such hook to apply it through; that path relies on the prompt alone. `tracker` and
+    `stage` have the same limitation, for the same reason: `CodeTracker` only sees a call by being handed
+    it directly, and only `run_with_prompted_tools` does that.
     """
     agent = handle.build()
     prompt = agent.build_prompt(question, context, agent_outputs)
@@ -393,7 +412,9 @@ def run_agent(
     full_prompt = f"{prefix}\n\n{prompt}" if prefix else prompt
 
     if agent.toolbox and not getattr(agent.llm, "runs_tools", False):
-        return run_with_prompted_tools(agent, full_prompt, data_path)
+        return run_with_prompted_tools(
+            agent, full_prompt, data_path, tracker=tracker, stage=stage, agent_name=handle.NAME
+        )
 
     if not prefix:
         return agent.run(question, context, agent_outputs)
@@ -418,11 +439,62 @@ def approve(name: str) -> bool | None:
         click.echo("Please answer y or n.")
 
 
+SCRIPTS_DIR = Path("scripts")
+
+
+def write_script(content: str, path: Path = SCRIPTS_DIR / "main.py") -> Path:
+    """Write `content` to `path`, creating its parent directory if it does not exist yet."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    return path
+
+
+def generate_code(question: str, agent_outputs: dict[str, str], tracker: CodeTracker) -> None:
+    """Turn everything `tracker` recorded into `scripts/main.py`, once every stage is approved.
+
+    `code_generator_agent` is asked to write the script itself — see `prompts/code_generator.md` — so
+    its narrative comments can come from what each stage actually reported (`agent_outputs`, rendered
+    through the agent's own `dependency_agent` list as `{agent_output}`) rather than from nothing. Its
+    answer is trusted only as far as `CodeTracker.covers()` can check: every call the tracker recorded
+    must still be named in the script it wrote back, or this falls back to `tracker.render_script()`
+    instead — the same calls, faithfully reproduced, with no narrative around them. Either way something
+    gets written; a plainer script is a smaller loss than one that silently reproduces less than the
+    pipeline actually did.
+
+    Best effort, like the rest of a pipeline's tail end: a model failure here does not undo an already
+    approved run, so it is logged to the console and swallowed rather than raised.
+    """
+    if not tracker.calls:
+        click.secho("\nNo tool calls were recorded; nothing to generate a script from.", fg="yellow")
+        return
+
+    script = tracker.render_script()
+    try:
+        reply = CodeGeneratorAgent.run(
+            question=question, context=tracker.render_calls(), agent_outputs=agent_outputs
+        )
+        parsed = as_json(reply)
+        candidate = str(parsed["script"]) if parsed and parsed.get("script") else ""
+        if candidate and tracker.covers(candidate):
+            script = candidate
+        else:
+            click.secho(
+                "  (code_generator_agent's script did not cover every call; using the recorded one)",
+                fg="yellow",
+            )
+    except Exception as error:
+        click.secho(f"  (code generation unavailable: {error})", fg="yellow")
+
+    path = write_script(script)
+    click.secho(f"\nWrote {path} — {len(tracker.calls)} step(s).", fg="green", bold=True)
+
+
 def run_pipeline(question: str, context: str, verdict: dict[str, Any]) -> bool:
     """Run every stage agent by agent, stopping at the console for approval after each one.
 
     Returns True when the whole pipeline was approved through to the end, False when the user ended the
-    session partway.
+    session partway. On a full approval, `generate_code` also writes `scripts/main.py` from everything
+    `tracker` recorded — see that function's own docstring.
     """
     agent_outputs: dict[str, str] = {
         DECIDER_SLOT: (
@@ -435,6 +507,7 @@ def run_pipeline(question: str, context: str, verdict: dict[str, Any]) -> bool:
     # The path every agent is told about explicitly, alongside whatever `{agent_output}` says — see
     # `extract_path`'s own docstring for why relying on prose alone was not holding up in practice.
     current_path = str(verdict.get("data_details", ""))
+    tracker = CodeTracker()
 
     for stage, package, handles in STAGES:
         click.secho(f"\n=== {stage} ===", fg="cyan", bold=True)
@@ -446,7 +519,8 @@ def run_pipeline(question: str, context: str, verdict: dict[str, Any]) -> bool:
                 agent_context = f"{context}\n\nCurrent data path: {current_path}"
                 try:
                     output = run_agent(
-                        handle, question, agent_context, agent_outputs, prefix, current_path
+                        handle, question, agent_context, agent_outputs, prefix, current_path,
+                        tracker=tracker, stage=stage,
                     )
                 except ValueError as error:
                     click.secho(f"{handle.NAME} could not run: {error}", fg="red")
@@ -485,6 +559,7 @@ def run_pipeline(question: str, context: str, verdict: dict[str, Any]) -> bool:
                 prefix = rejection_prefix(handle, package, problem, text)
 
     click.secho("\nEvery stage approved. The run is complete.", fg="green", bold=True)
+    generate_code(question, agent_outputs, tracker)
     return True
 
 

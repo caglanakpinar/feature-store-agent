@@ -25,3 +25,22 @@ agents:
     prompt_path: "prompts/requirements.md"
     dependencies:
       - "chat_agent"
+
+  code_generator_agent:  # runs once, after every pipeline stage is approved — see console/run.py's
+    # generate_code(). `dependency_agent` (not `dependencies:` — see `requirement_agent`'s own entry
+    # above, which uses a field `AgentConfigs` does not have and so renders no `{agent_output}` at all)
+    # lists every worker agent the pipeline runs, in order, so this agent's prompt can read what each
+    # one actually reported.
+    type: "generator"
+    llm: "generator_llm_thinker"
+    substitute_llm: "generator_llm_thinker_2"
+    prompt_path: "prompts/code_generator.md"
+    dependency_agent:
+      - "data_reader_agent"
+      - "data_analyzer_agent"
+      - "data_preprocessor_agent"
+      - "data_quality_agent"
+      - "problem_analyzer_agent"
+      - "missing_value_agent"
+      - "feature_prep_agent"
+      - "feature_selection_agent"
