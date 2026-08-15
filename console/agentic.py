@@ -91,6 +91,20 @@ class RequirementAgent(AgentHandle):
     NAME = "requirement_agent"
 
 
+class CodeGeneratorAgent(AgentHandle):
+    """`code_generator_agent` — runs once, after every pipeline stage is approved.
+
+    Its `dependency_agent` in `agentic_configurations.yaml` lists every worker agent the pipeline ran,
+    in order, so `{agent_output}` in `prompts/code_generator.md` renders each stage's own text, labelled
+    by who produced it. What it is actually meant to reproduce faithfully — the real function each stage
+    called and the exact arguments it ran with — does not come from that prose at all: `run_pipeline`
+    passes it separately as `context`, rendered by `CodeTracker.render_calls()`. See that module's own
+    docstring for why: an agent's text is a description of what it did, not a record of it.
+    """
+
+    NAME = "code_generator_agent"
+
+
 def _patch_chromadb_otel() -> None:
     """Let `chromadb` import even when its optional OTLP exporter is missing.
 
