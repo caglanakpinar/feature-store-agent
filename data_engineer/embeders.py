@@ -6,11 +6,11 @@ Building it is the two-line pattern `agent_builder`'s own docstring shows —
     embeddings = build_embeddings("rag_embeddings", configs)
 
 — which is what a `"rag"`/`"rag_builder"`/`"retriever"` agent needs to turn a question into the vector
-`ds_knowledge_db` and `ds_feature_knowledge_db` are searched with, once `rag_data_engineer_decider_agent`'s
+`ds_knowledge_db` and `ds_knowledge_text_db` are searched with, once `rag_data_engineer_decider_agent`'s
 `type` switches from `"thinker"` to one of those. `RAGBuilderAgent` already builds and wires its own
 embeddings connector from the config (see `agent_builder.build_agent`'s `embeddings=` argument); the
 handle here is for everything else that needs the same vector without going through an agent — indexing
-a document into `ds_knowledge_db`/`ds_feature_knowledge_db`, or a script that queries one directly.
+a document into `ds_knowledge_db`/`ds_knowledge_text_db`, or a script that queries one directly.
 
     from data_engineer.embeders import RAGEmbeddings
 
@@ -70,6 +70,6 @@ class EmbeddingsHandle:
 
 
 class RAGEmbeddings(EmbeddingsHandle):
-    """`rag_embeddings` — the embedder `ds_knowledge_db`/`ds_feature_knowledge_db` are searched with."""
+    """`rag_embeddings` — the embedder `ds_knowledge_db`/`ds_knowledge_text_db` are searched with."""
 
     NAME = "rag_embeddings"

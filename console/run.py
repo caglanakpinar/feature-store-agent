@@ -47,7 +47,7 @@ import click
 # agent's `llm:` entry names straight out of this module — so importing it again here costs nothing new.
 from models.llms import ToolFailure, as_tool_content
 
-from console.agentic import ChatAgent, RequirementAgent
+from console.agentic import ChatAgent, RequirementAgent, save_question
 from data_engineer.agents.workers import (
     DataAnalyzer,
     DataPreprocessor,
@@ -429,6 +429,12 @@ def chat() -> None:
 
         transcript.append(f"User: {question}")
         context = "\n".join(transcript)
+
+        # Every new question is indexed into both packages' knowledge bases as it arrives, regardless
+        # of whether `rag_data_engineer_decider_agent`/`problem_analyzer_agent` are in "rag" mode yet —
+        # see `save_question`'s own docstring for why this is best-effort and never blocks the turn.
+        save_question("data_engineer", question)
+        save_question("feature_engineering", question)
 
         try:
             verdict = as_json(RequirementAgent.run(question=question, context=context))

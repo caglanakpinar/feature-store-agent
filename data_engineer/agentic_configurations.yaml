@@ -26,23 +26,23 @@ llms:
 
 
 dbs:
-  # The knowledge base the problem thinker retrieves from once `rag_problem_thinker_agent.type` is
-  # switched to "rag". `dimension` must match the width of the embeddings model below.
+  # The two knowledge stores `rag_data_engineer_decider_agent` retrieves from once its `type` is
+  # switched to "rag", and the ones `console.agentic.save_question` writes every incoming chat question
+  # into regardless of that switch. Both paths are real, already-built stores — `data_engineer/dbs/`,
+  # the same directory `dataset.py`'s synthetic knowledge-base build and `web_search_cache.py`'s
+  # `open_cache()` already use — not the `benchmarks/artifacts/...` path this block pointed at before,
+  # which names a directory nothing in this repo creates. `dimension` must match the width of the
+  # embeddings model below.
   - name: "ds_knowledge_db"
     type: "vector"
     db: "faiss"
-    path: "benchmarks/artifacts/ds_knowledge.index"
+    path: "data_engineer/dbs/faiss_index/index.faiss"
     dimension: 3072
     metric: "cosine"
-
-  # The knowledge base the problem thinker retrieves from once `rag_problem_thinker_agent.type` is
-  # switched to "rag". `dimension` must match the width of the embeddings model below.
-  - name: "ds_feature_knowledge_db"
+  - name: "ds_knowledge_text_db"
     type: "vector"
-    db: "faiss"
-    path: "benchmarks/artifacts/ds_knowledge.index"
-    dimension: 3072
-    metric: "cosine"
+    db: "chroma"
+    path: "data_engineer/dbs/chroma_db"
 
 
 embeddings:

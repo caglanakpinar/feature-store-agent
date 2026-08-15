@@ -15,14 +15,24 @@ lines here keeps that direction intact instead of reaching back into a leaf pack
 
     reply = ChatAgent.run(question="what can you help me with?")
     gate = RequirementAgent.run(question=reply)   # a JSON string — see requirements.md's own contract
+
+`save_question` is the other thing this module owns: writing an incoming chat question into a
+package's own knowledge base (`ds_knowledge_db`, `ds_knowledge_text_db`) so a future retrieval can find
+it, regardless of whether the agent that would eventually read that store is in `"rag"` mode yet.
 """
 
 from __future__ import annotations
 
+import hashlib
+import importlib
+import sys
+import time
+import types
 from pathlib import Path
 from typing import Any, ClassVar
 
-from agent_builder import build_agent
+from agent_builder import build_agent, build_vector_db, load_configs
+from uilts.logger import logger
 
 # `agentic_configurations.yaml` lives at the root of this package.
 CONFIG_DIR = Path(__file__).resolve().parent
@@ -79,3 +89,111 @@ class RequirementAgent(AgentHandle):
     """
 
     NAME = "requirement_agent"
+
+
+def _patch_chromadb_otel() -> None:
+    """Let `chromadb` import even when its optional OTLP exporter is missing.
+
+    The same workaround `*/dbs/dataset.py` and `console/web_search.py` already apply before importing
+    `chromadb` — repeated here rather than shared, so this module still loads with neither of those
+    packages installed. `db_connector.vector.ChromaDB` imports `chromadb` directly with no patch of its
+    own, so this has to run before the first `build_vector_db(..., db="chroma")` call.
+    """
+    target = "opentelemetry.exporter.otlp.proto.grpc.trace_exporter"
+    if target in sys.modules:
+        return
+    module = types.ModuleType(target)
+
+    class OTLPSpanExporter:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+    module.OTLPSpanExporter = OTLPSpanExporter  # type: ignore[attr-defined]
+    sys.modules[target] = module
+
+
+def save_question(package: str, question: str, answer: str = "") -> None:
+    """Embed `question` and upsert it into `package`'s knowledge base.
+
+    Writes to every vector db that package's `dbs:` block declares under the names
+    `ds_knowledge_db` (FAISS) and `ds_knowledge_text_db` (Chroma) — whichever of the two actually
+    exist there — keyed by a hash of the question text, so asking the same thing twice replaces the
+    entry rather than duplicating it.
+
+    Embeds with `<package>.dbs.dataset.SyntheticEmbedder` — the same offline, deterministic embedder
+    `dataset.py`'s own knowledge-base build fitted and `dbs/web_search_cache.py`'s `open_cache()`
+    already reuses — not the `rag_embeddings` entry in `agentic_configurations.yaml` (the real Gemini
+    embeddings API). The two are not interchangeable here: the existing `ds_knowledge_db` index was
+    built at `SyntheticEmbedder`'s width (256 dimensions), and `rag_embeddings` answers in a different
+    one (3072) that FAISS would refuse to add beside it. Once retrieval actually moves to real
+    embeddings this write path needs to move with it, or the two will drift.
+
+    Best effort throughout: no fitted embedder yet, an unbuildable db, or a write failure is logged and
+    skipped rather than raised. This runs alongside the real pipeline work on every chat turn, and a
+    knowledge-base write is never worth stalling a run over.
+    """
+    _patch_chromadb_otel()
+
+    try:
+        dataset = importlib.import_module(f"{package}.dbs.dataset")
+        embedder_dir = dataset.FAISS_DIR / "embedder"
+        if not embedder_dir.exists():
+            logger.warning(f"save_question: no fitted embedder yet for {package!r} at {embedder_dir}.")
+            return
+        vector = dataset.SyntheticEmbedder.load(embedder_dir).encode([question])[0].tolist()
+    except Exception as error:
+        logger.warning(f"save_question: could not embed a question for {package!r}: {error}")
+        return
+
+    configs = load_configs(package)
+    document_id = hashlib.sha256(question.strip().lower().encode()).hexdigest()
+    metadata = {"question": question, "answer": answer, "saved_at": time.time()}
+
+    for db_name in ("ds_knowledge_db", "ds_knowledge_text_db"):
+        if db_name not in configs.db_confgs:
+            continue
+
+        try:
+            db = build_vector_db(db_name, configs)
+            _ensure_id_mapped(db)
+            db.upsert(ids=[document_id], vectors=[vector], metadatas=[metadata], documents=[question])
+            if hasattr(db, "save"):  # FAISS is in-memory until this is called; Chroma writes through
+                db.save()
+        except Exception as error:
+            logger.warning(f"save_question: could not save to {package}.{db_name}: {error}")
+
+
+def _ensure_id_mapped(db: Any) -> None:
+    """Rebuild a loaded `FAISSDB`'s index as `faiss.IndexIDMap` when it isn't already one.
+
+    `FAISSDB.upsert` assumes `self.client.index` exists, which is only true of an index it built and
+    saved itself (`_initialize_connection` wraps a fresh index in `IndexIDMap` before assigning it). An
+    index built directly with `faiss` — as this project's own `dbs/dataset.py` knowledge-base fixtures
+    are — loads back as a plain `IndexFlatIP`/`IndexFlatL2`, with no `.index` attribute, and `upsert`
+    raises `AttributeError` on it.
+
+    `faiss.IndexIDMap` refuses to wrap an index that already holds vectors (`index must be empty on
+    input`), so an in-place wrap is not an option here — this reconstructs every existing vector out of
+    the loaded flat index and re-adds it, in the same order, to a fresh empty index of the same type
+    and dimension, wrapped in `IndexIDMap` from the start. Their positional index (`0..ntotal-1`)
+    becomes their id; `FAISSDB`'s own `_id_map`/`_metadata`/`_documents` still won't carry a string id
+    or metadata for them, since those never existed for vectors this connector did not itself insert —
+    only a lookup that goes through this connector rather than the array position they were originally
+    built at is affected.
+    """
+    if type(db).__name__ != "FAISSDB":
+        return
+
+    import faiss
+    import numpy as np
+
+    client = getattr(db, "client", None)
+    if client is None or isinstance(client, faiss.IndexIDMap):
+        return
+
+    wrapped = faiss.IndexIDMap(type(client)(client.d))
+    if client.ntotal:
+        vectors = client.reconstruct_n(0, client.ntotal)
+        wrapped.add_with_ids(vectors, np.arange(client.ntotal, dtype="int64"))
+
+    db.client = wrapped
