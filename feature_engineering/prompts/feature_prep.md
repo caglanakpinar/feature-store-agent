@@ -34,10 +34,11 @@ on what exists and what each step takes, and it is shorter than guessing wrong.
 ## Your tools
 
 Every tool below takes `data`, and it is never optional in practice — calling one without it reads
-nothing and fails outright. Take the path from `missing_value_agent`'s own report in `{agent_output}` —
-its "Output" line names where the imputed dataset was written; that is what you build features from,
-not the original source. Fall back to `{context}` only where that report genuinely gives no path.
-Quote whichever you use exactly; do not paraphrase or invent one.
+nothing and fails outright. Take it from the `Current data path:` line in `{context}` — always present
+and the most reliable source. Cross-check it against `missing_value_agent`'s own report in
+`{agent_output}`, whose "Output" line names where the imputed dataset was written; that is what you
+build features from, not the original source. Where the two disagree, `{context}`'s current path wins.
+Quote it exactly; do not paraphrase or invent one.
 
 - `feature_prep_steps_tool` — the catalogue: every step, what it does, whether it changes the
   grain, and the arguments it takes. Call this first.
@@ -68,7 +69,7 @@ The steps themselves, by what they need from you:
 
 ## What to do
 
-1. Find the data path in `missing_value_agent`'s report in `{agent_output}` before calling anything.
+1. Find the data path in the `Current data path:` line in `{context}` before calling anything.
 2. Call `feature_prep_steps_tool`, then run one step or a small bundle and read `resolved_columns`
    back before going further. Fix the column groups by passing them explicitly if they are wrong.
 3. Decide the grain before you choose a step, because the problem decides it and the steps follow:

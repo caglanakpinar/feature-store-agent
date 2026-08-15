@@ -110,7 +110,7 @@ tools:
         required: false
       - name: "steps"
         type: "list"
-        description: "Steps to run, in order: normalize_columns, strip_whitespace, coerce_types, drop_duplicates, drop_missing_rows, fill_missing, drop_missing_columns, drop_constant_columns, clip_outliers, transform. Each is a step name on its own, or {step, ...its own arguments}. Defaults to the standard cleaning sequence."
+        description: "Steps to run, in order: normalize_columns, strip_whitespace, coerce_types, drop_duplicates, drop_missing_rows, fill_missing, drop_missing_columns, drop_constant_columns, drop_columns, clip_outliers, transform. Each is a step name on its own, or {step, ...its own arguments}. Defaults to the standard cleaning sequence."
         required: false
       - name: "options"
         type: "dict"

@@ -458,6 +458,36 @@ def drop_constant_columns(source: Dataset | Prepared, drop_empty: bool = True) -
     return _step(prepared, "drop_constant_columns", _with(data, rows, kept), {"dropped": dropped})
 
 
+def drop_columns(source: Dataset | Prepared, columns: Sequence[str] = ()) -> Prepared:
+    """Drop specific columns by name — an id that should never be a feature, a column the request
+    named out of scope, one a leakage check already flagged.
+
+    Unlike `drop_missing_columns`/`drop_constant_columns`, which decide from what a column's values
+    look like, this is for a column that has to go regardless of what it contains.
+
+    Args:
+        source: The dataset, or the `Prepared` a previous step returned.
+        columns: The columns to drop, by name. A name the dataset does not have is ignored rather than
+            failing the step — dropping a column that is already gone leaves the same result. Empty by
+            default: there is no sensible column to drop without being told one, so called bare this
+            is a no-op rather than a guess.
+
+    Returns:
+        The dataset without those columns.
+    """
+    prepared = _prepared(source)
+    data = prepared.data
+
+    wanted = [columns] if isinstance(columns, str) else list(columns or [])
+    dropped = [column for column in wanted if column in data.columns]
+    kept = [column for column in data.columns if column not in dropped]
+    if dropped:
+        logger.info(f"drop_columns: dropped {sorted(dropped)}.")
+
+    rows = [{column: row[column] for column in kept} for row in data.rows]
+    return _step(prepared, "drop_columns", _with(data, rows, kept), {"dropped": dropped})
+
+
 def clip_outliers(
     source: Dataset | Prepared,
     columns: Sequence[str] | None = None,
@@ -539,7 +569,7 @@ def clip_outliers(
 
 def transform(
     source: Dataset | Prepared,
-    transformations: Sequence[dict[str, Any]],
+    transformations: Sequence[dict[str, Any]] = (),
 ) -> Prepared:
     """Add transformed copies of numeric columns, as new columns beside the originals.
 
@@ -555,6 +585,8 @@ def transform(
         transformations: One mapping per column to transform: `{"column": ..., "operation": ...}`,
             with an optional `as` naming the new column and `bins` for "bucket". Operations are
             "log", "log1p", "sqrt", "square", "abs", "reciprocal", "zscore", "minmax", "bucket".
+            Empty by default — unlike every other step here, there is no sensible default column to
+            transform, so called bare this is a no-op rather than a guess.
 
     Returns:
         The dataset with the new columns appended, and what each one was derived from.
@@ -608,6 +640,7 @@ STEPS: dict[str, Callable[..., Prepared]] = {
     "fill_missing": fill_missing,
     "drop_missing_columns": drop_missing_columns,
     "drop_constant_columns": drop_constant_columns,
+    "drop_columns": drop_columns,
     "clip_outliers": clip_outliers,
     "transform": transform,
 }

@@ -41,9 +41,12 @@ what it looks at — it is the authority on both, and shorter than guessing wron
 
   - `data_source` — the dataset to analyse, or the rows themselves. This is never optional in
     practice: leaving it out calls the tool with nothing to read, and it fails outright. Take it from
-    the dependency named in `{agent_output}` — `data_reader_agent`'s "Source" line when you are
-    running as the analyzer, `data_preprocessor_agent`'s written path when you are running as the
-    quality check. Quote that string; do not reconstruct or guess it from `{question}`.
+    the `Current data path:` line in `{context}` — always present and the most reliable source.
+    Cross-check it against the dependency named in `{agent_output}` — `data_reader_agent`'s "Source"
+    line when you are running as the analyzer, `data_preprocessor_agent`'s written path when you are
+    running as the quality check — but where the two disagree, `{context}`'s current path wins, since
+    it reflects whatever the most recent stage actually wrote. Quote it exactly; do not reconstruct or
+    guess it from `{question}`.
   - `analyzers` — which to run, in order. Defaults to all nine.
   - `target` — the column being predicted, for balance and leakage checks. Omit where there is none.
   - `id_columns` / `date_columns` — entity and timestamp columns. Inferred from names and values when
@@ -80,10 +83,9 @@ and one failure is worth more than no report.
 
 ## What to do
 
-1. Before calling anything, read `data_source` out of whichever dependency's report `{agent_output}`
-   carries — `data_reader_agent`'s "Source" line, or `data_preprocessor_agent`'s written path. Quote
-   it exactly; do not paraphrase or guess a path. Where `agent_output` has no such report yet, that is
-   a reason to escalate, not to call the tool with nothing.
+1. Before calling anything, read `data_source` out of the `Current data path:` line in `{context}`.
+   Quote it exactly; do not paraphrase or guess a path. Where that line is genuinely empty, that is a
+   reason to escalate, not to call the tool with nothing.
 2. Decide which analyzers the request actually needs before running the default set blind — a
    dataset with an obvious grain and no target does not need `target_summary`, and skipping an
    analyzer that does not apply is not the same as skipping one that does.

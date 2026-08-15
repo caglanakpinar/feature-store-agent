@@ -1,0 +1,1008 @@
+{
+  "source": "data/telco_churn/telco_customer_churn.csv",
+  "rows": 7043,
+  "columns": 21,
+  "analyses": [
+    {
+      "analysis": "describe",
+      "summary": "21 columns over 7,043 rows: 6 boolean, 12 categorical, 3 numeric.",
+      "details": {
+        "row_count": 7043,
+        "kinds": {
+          "customerID": "categorical",
+          "gender": "categorical",
+          "SeniorCitizen": "boolean",
+          "Partner": "boolean",
+          "Dependents": "boolean",
+          "tenure": "numeric",
+          "PhoneService": "boolean",
+          "MultipleLines": "categorical",
+          "InternetService": "categorical",
+          "OnlineSecurity": "categorical",
+          "OnlineBackup": "categorical",
+          "DeviceProtection": "categorical",
+          "TechSupport": "categorical",
+          "StreamingTV": "categorical",
+          "StreamingMovies": "categorical",
+          "Contract": "categorical",
+          "PaperlessBilling": "boolean",
+          "PaymentMethod": "categorical",
+          "MonthlyCharges": "numeric",
+          "TotalCharges": "numeric",
+          "Churn": "boolean"
+        },
+        "columns": {
+          "customerID": {
+            "kind": "categorical",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 7043,
+            "top": [
+              {
+                "value": "0002-ORFBO",
+                "count": 1,
+                "share": 0.000142
+              },
+              {
+                "value": "0003-MKNFE",
+                "count": 1,
+                "share": 0.000142
+              },
+              {
+                "value": "0004-TLHLJ",
+                "count": 1,
+                "share": 0.000142
+              },
+              {
+                "value": "0011-IGKFF",
+                "count": 1,
+                "share": 0.000142
+              },
+              {
+                "value": "0013-EXCHZ",
+                "count": 1,
+                "share": 0.000142
+              }
+            ],
+            "longest": 10
+          },
+          "gender": {
+            "kind": "categorical",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 2,
+            "top": [
+              {
+                "value": "Male",
+                "count": 3555,
+                "share": 0.504756
+              },
+              {
+                "value": "Female",
+                "count": 3488,
+                "share": 0.495244
+              }
+            ],
+            "longest": 6
+          },
+          "SeniorCitizen": {
+            "kind": "boolean",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 2,
+            "mean": 0.162147,
+            "std": 0.368612,
+            "min": 0.0,
+            "p25": 0.0,
+            "median": 0.0,
+            "p75": 0.0,
+            "max": 1.0,
+            "sum": 1142.0,
+            "zeros": 5901,
+            "negatives": 0,
+            "skew": 1.833242
+          },
+          "Partner": {
+            "kind": "boolean",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 2,
+            "stored_as": "text",
+            "unreadable": 7043
+          },
+          "Dependents": {
+            "kind": "boolean",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 2,
+            "stored_as": "text",
+            "unreadable": 7043
+          },
+          "tenure": {
+            "kind": "numeric",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 73,
+            "mean": 32.371149,
+            "std": 24.559481,
+            "min": 0.0,
+            "p25": 9.0,
+            "median": 29.0,
+            "p75": 55.0,
+            "max": 72.0,
+            "sum": 227990.0,
+            "zeros": 11,
+            "negatives": 0,
+            "skew": 0.239489
+          },
+          "PhoneService": {
+            "kind": "boolean",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 2,
+            "stored_as": "text",
+            "unreadable": 7043
+          },
+          "MultipleLines": {
+            "kind": "categorical",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 3,
+            "top": [
+              {
+                "value": "No",
+                "count": 3390,
+                "share": 0.481329
+              },
+              {
+                "value": "Yes",
+                "count": 2971,
+                "share": 0.421837
+              },
+              {
+                "value": "No phone service",
+                "count": 682,
+                "share": 0.096834
+              }
+            ],
+            "longest": 16
+          },
+          "InternetService": {
+            "kind": "categorical",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 3,
+            "top": [
+              {
+                "value": "Fiber optic",
+                "count": 3096,
+                "share": 0.439585
+              },
+              {
+                "value": "DSL",
+                "count": 2421,
+                "share": 0.343746
+              },
+              {
+                "value": "No",
+                "count": 1526,
+                "share": 0.216669
+              }
+            ],
+            "longest": 11
+          },
+          "OnlineSecurity": {
+            "kind": "categorical",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 3,
+            "top": [
+              {
+                "value": "No",
+                "count": 3498,
+                "share": 0.496663
+              },
+              {
+                "value": "Yes",
+                "count": 2019,
+                "share": 0.286668
+              },
+              {
+                "value": "No internet service",
+                "count": 1526,
+                "share": 0.216669
+              }
+            ],
+            "longest": 19
+          },
+          "OnlineBackup": {
+            "kind": "categorical",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 3,
+            "top": [
+              {
+                "value": "No",
+                "count": 3088,
+                "share": 0.43845
+              },
+              {
+                "value": "Yes",
+                "count": 2429,
+                "share": 0.344881
+              },
+              {
+                "value": "No internet service",
+                "count": 1526,
+                "share": 0.216669
+              }
+            ],
+            "longest": 19
+          },
+          "DeviceProtection": {
+            "kind": "categorical",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 3,
+            "top": [
+              {
+                "value": "No",
+                "count": 3095,
+                "share": 0.439443
+              },
+              {
+                "value": "Yes",
+                "count": 2422,
+                "share": 0.343888
+              },
+              {
+                "value": "No internet service",
+                "count": 1526,
+                "share": 0.216669
+              }
+            ],
+            "longest": 19
+          },
+          "TechSupport": {
+            "kind": "categorical",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 3,
+            "top": [
+              {
+                "value": "No",
+                "count": 3473,
+                "share": 0.493114
+              },
+              {
+                "value": "Yes",
+                "count": 2044,
+                "share": 0.290217
+              },
+              {
+                "value": "No internet service",
+                "count": 1526,
+                "share": 0.216669
+              }
+            ],
+            "longest": 19
+          },
+          "StreamingTV": {
+            "kind": "categorical",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 3,
+            "top": [
+              {
+                "value": "No",
+                "count": 2810,
+                "share": 0.398978
+              },
+              {
+                "value": "Yes",
+                "count": 2707,
+                "share": 0.384353
+              },
+              {
+                "value": "No internet service",
+                "count": 1526,
+                "share": 0.216669
+              }
+            ],
+            "longest": 19
+          },
+          "StreamingMovies": {
+            "kind": "categorical",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 3,
+            "top": [
+              {
+                "value": "No",
+                "count": 2785,
+                "share": 0.395428
+              },
+              {
+                "value": "Yes",
+                "count": 2732,
+                "share": 0.387903
+              },
+              {
+                "value": "No internet service",
+                "count": 1526,
+                "share": 0.216669
+              }
+            ],
+            "longest": 19
+          },
+          "Contract": {
+            "kind": "categorical",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 3,
+            "top": [
+              {
+                "value": "Month-to-month",
+                "count": 3875,
+                "share": 0.550192
+              },
+              {
+                "value": "Two year",
+                "count": 1695,
+                "share": 0.240664
+              },
+              {
+                "value": "One year",
+                "count": 1473,
+                "share": 0.209144
+              }
+            ],
+            "longest": 14
+          },
+          "PaperlessBilling": {
+            "kind": "boolean",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 2,
+            "stored_as": "text",
+            "unreadable": 7043
+          },
+          "PaymentMethod": {
+            "kind": "categorical",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 4,
+            "top": [
+              {
+                "value": "Electronic check",
+                "count": 2365,
+                "share": 0.335794
+              },
+              {
+                "value": "Mailed check",
+                "count": 1612,
+                "share": 0.22888
+              },
+              {
+                "value": "Bank transfer (automatic)",
+                "count": 1544,
+                "share": 0.219225
+              },
+              {
+                "value": "Credit card (automatic)",
+                "count": 1522,
+                "share": 0.216101
+              }
+            ],
+            "longest": 25
+          },
+          "MonthlyCharges": {
+            "kind": "numeric",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 1585,
+            "mean": 64.761692,
+            "std": 30.090047,
+            "min": 18.25,
+            "p25": 35.5,
+            "median": 70.35,
+            "p75": 89.85,
+            "max": 118.75,
+            "sum": 456116.6,
+            "zeros": 0,
+            "negatives": 0,
+            "skew": -0.220477
+          },
+          "TotalCharges": {
+            "kind": "numeric",
+            "count": 7032,
+            "missing": 11,
+            "missing_rate": 0.001562,
+            "distinct": 6530,
+            "mean": 2283.300441,
+            "std": 2266.771362,
+            "min": 18.8,
+            "p25": 401.45,
+            "median": 1397.475,
+            "p75": 3794.7375,
+            "max": 8684.8,
+            "sum": 16056168.7,
+            "zeros": 0,
+            "negatives": 0,
+            "skew": 0.961437
+          },
+          "Churn": {
+            "kind": "boolean",
+            "count": 7043,
+            "missing": 0,
+            "missing_rate": 0.0,
+            "distinct": 2,
+            "stored_as": "text",
+            "unreadable": 7043
+          }
+        }
+      },
+      "findings": [
+        {
+          "level": "warning",
+          "message": "Partner, Dependents, PhoneService, PaperlessBilling, Churn: numbers or dates written as text \u2014 coerce_types before anything measures them."
+        }
+      ]
+    },
+    {
+      "analysis": "missing_values",
+      "summary": "1 of 21 columns hold missing values; 99.8% of rows are complete.",
+      "details": {
+        "columns": {
+          "TotalCharges": {
+            "missing": 11,
+            "rate": 0.001562
+          }
+        },
+        "complete_rows": 7032,
+        "complete_rate": 0.998438,
+        "max_missing_rate": 0.5,
+        "patterns": [
+          {
+            "columns": [
+              "TotalCharges"
+            ],
+            "rows": 11,
+            "share": 0.001562
+          }
+        ]
+      },
+      "findings": [
+        {
+          "level": "info",
+          "message": "1 column(s) hold some missing values, worst TotalCharges at 0.2%; fill_missing decides them, missing_indicators keeps the fact that they were missing."
+        }
+      ]
+    },
+    {
+      "analysis": "duplicates",
+      "summary": "0 duplicate row(s) (0.0%); 1 key column(s) checked.",
+      "details": {
+        "duplicate_rows": 0,
+        "duplicate_rate": 0.0,
+        "unique_rows": 7043,
+        "subset": [
+          "customerID",
+          "gender",
+          "SeniorCitizen",
+          "Partner",
+          "Dependents",
+          "tenure",
+          "PhoneService",
+          "MultipleLines",
+          "InternetService",
+          "OnlineSecurity",
+          "OnlineBackup",
+          "DeviceProtection",
+          "TechSupport",
+          "StreamingTV",
+          "StreamingMovies",
+          "Contract",
+          "PaperlessBilling",
+          "PaymentMethod",
+          "MonthlyCharges",
+          "TotalCharges",
+          "Churn"
+        ],
+        "keys": {
+          "customerID": {
+            "distinct": 7043,
+            "duplicated": 0,
+            "max_repeats": 1,
+            "examples": []
+          }
+        }
+      },
+      "findings": []
+    },
+    {
+      "analysis": "outliers",
+      "summary": "0 outlying value(s) across 3 numeric column(s), by iqr at 1.5.",
+      "details": {
+        "method": "iqr",
+        "factor": 1.5,
+        "columns": {
+          "tenure": {
+            "lower": -60.0,
+            "upper": 124.0,
+            "below": 0,
+            "above": 0,
+            "outliers": 0,
+            "rate": 0.0,
+            "min": 0.0,
+            "max": 72.0
+          },
+          "MonthlyCharges": {
+            "lower": -46.025,
+            "upper": 171.375,
+            "below": 0,
+            "above": 0,
+            "outliers": 0,
+            "rate": 0.0,
+            "min": 18.25,
+            "max": 118.75
+          },
+          "TotalCharges": {
+            "lower": -4688.48125,
+            "upper": 8884.66875,
+            "below": 0,
+            "above": 0,
+            "outliers": 0,
+            "rate": 0.0,
+            "min": 18.8,
+            "max": 8684.8
+          }
+        },
+        "skipped": []
+      },
+      "findings": []
+    },
+    {
+      "analysis": "distributions",
+      "summary": "4 numeric column(s) profiled; 0 skewed beyond 1.",
+      "details": {
+        "columns": {
+          "SeniorCitizen": {
+            "shape": "binary",
+            "skew": 1.833242,
+            "kurtosis": 1.360777,
+            "zeros": 5901,
+            "negatives": 0,
+            "distinct": 2,
+            "suggested_transform": null,
+            "histogram": {
+              "edges": [
+                0.0,
+                0.1,
+                0.2,
+                0.3,
+                0.4,
+                0.5,
+                0.6,
+                0.7,
+                0.8,
+                0.9,
+                1.0
+              ],
+              "counts": [
+                5901,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1142
+              ]
+            }
+          },
+          "tenure": {
+            "shape": "continuous",
+            "skew": 0.239489,
+            "kurtosis": -1.387239,
+            "zeros": 11,
+            "negatives": 0,
+            "distinct": 73,
+            "suggested_transform": null,
+            "histogram": {
+              "edges": [
+                0.0,
+                7.2,
+                14.4,
+                21.6,
+                28.8,
+                36.0,
+                43.2,
+                50.4,
+                57.6,
+                64.8,
+                72.0
+              ],
+              "counts": [
+                1612,
+                759,
+                570,
+                556,
+                495,
+                494,
+                452,
+                495,
+                501,
+                1109
+              ]
+            }
+          },
+          "MonthlyCharges": {
+            "shape": "continuous",
+            "skew": -0.220477,
+            "kurtosis": -1.257219,
+            "zeros": 0,
+            "negatives": 0,
+            "distinct": 1585,
+            "suggested_transform": null,
+            "histogram": {
+              "edges": [
+                18.25,
+                28.3,
+                38.35,
+                48.4,
+                58.45,
+                68.5,
+                78.55,
+                88.6,
+                98.65,
+                108.7,
+                118.75
+              ],
+              "counts": [
+                1606,
+                191,
+                365,
+                639,
+                473,
+                895,
+                953,
+                869,
+                758,
+                294
+              ]
+            }
+          },
+          "TotalCharges": {
+            "shape": "continuous",
+            "skew": 0.961437,
+            "kurtosis": -0.232487,
+            "zeros": 0,
+            "negatives": 0,
+            "distinct": 6530,
+            "suggested_transform": null,
+            "histogram": {
+              "edges": [
+                18.8,
+                885.4,
+                1752.0,
+                2618.6,
+                3485.2,
+                4351.8,
+                5218.4,
+                6085.0,
+                6951.6,
+                7818.2,
+                8684.8
+              ],
+              "counts": [
+                2709,
+                1228,
+                671,
+                508,
+                454,
+                412,
+                395,
+                310,
+                223,
+                122
+              ]
+            }
+          }
+        },
+        "skewed": []
+      },
+      "findings": []
+    },
+    {
+      "analysis": "correlations",
+      "summary": "6 numeric pair(s) measured by pearson; 0 above |r| 0.95.",
+      "details": {
+        "method": "pearson",
+        "columns": [
+          "SeniorCitizen",
+          "Partner",
+          "Dependents",
+          "tenure",
+          "PhoneService",
+          "PaperlessBilling",
+          "MonthlyCharges",
+          "TotalCharges",
+          "Churn"
+        ],
+        "strongest": [
+          {
+            "columns": [
+              "tenure",
+              "TotalCharges"
+            ],
+            "r": 0.82588
+          },
+          {
+            "columns": [
+              "MonthlyCharges",
+              "TotalCharges"
+            ],
+            "r": 0.651065
+          },
+          {
+            "columns": [
+              "tenure",
+              "MonthlyCharges"
+            ],
+            "r": 0.2479
+          },
+          {
+            "columns": [
+              "SeniorCitizen",
+              "MonthlyCharges"
+            ],
+            "r": 0.220173
+          },
+          {
+            "columns": [
+              "SeniorCitizen",
+              "TotalCharges"
+            ],
+            "r": 0.102411
+          },
+          {
+            "columns": [
+              "SeniorCitizen",
+              "tenure"
+            ],
+            "r": 0.016567
+          }
+        ],
+        "redundant": []
+      },
+      "findings": []
+    },
+    {
+      "analysis": "target_summary",
+      "summary": "failed: no column named 'churn'; it has ['customerID', 'gender', 'SeniorCitizen', 'Partner', 'Dependents', 'tenure', 'PhoneService', 'MultipleLines', 'InternetService', 'OnlineSecurity', 'OnlineBackup', 'DeviceProtection', 'TechSupport', 'StreamingTV', 'StreamingMovies', 'Contract', 'PaperlessBilling', 'PaymentMethod', 'MonthlyCharges', 'TotalCharges', 'Churn'].",
+      "details": {},
+      "findings": [
+        {
+          "level": "warning",
+          "message": "target_summary did not run: no column named 'churn'; it has ['customerID', 'gender', 'SeniorCitizen', 'Partner', 'Dependents', 'tenure', 'PhoneService', 'MultipleLines', 'InternetService', 'OnlineSecurity', 'OnlineBackup', 'DeviceProtection', 'TechSupport', 'StreamingTV', 'StreamingMovies', 'Contract', 'PaperlessBilling', 'PaymentMethod', 'MonthlyCharges', 'TotalCharges', 'Churn']."
+        }
+      ]
+    },
+    {
+      "analysis": "timeline",
+      "summary": "no date columns were found.",
+      "details": {
+        "reference_date": "2026-08-15T15:42:39.595227",
+        "columns": {}
+      },
+      "findings": []
+    },
+    {
+      "analysis": "grain",
+      "summary": "failed: no column(s) ['customerid']; it has ['customerID', 'gender', 'SeniorCitizen', 'Partner', 'Dependents', 'tenure', 'PhoneService', 'MultipleLines', 'InternetService', 'OnlineSecurity', 'OnlineBackup', 'DeviceProtection', 'TechSupport', 'StreamingTV', 'StreamingMovies', 'Contract', 'PaperlessBilling', 'PaymentMethod', 'MonthlyCharges', 'TotalCharges', 'Churn'].",
+      "details": {},
+      "findings": [
+        {
+          "level": "warning",
+          "message": "grain did not run: no column(s) ['customerid']; it has ['customerID', 'gender', 'SeniorCitizen', 'Partner', 'Dependents', 'tenure', 'PhoneService', 'MultipleLines', 'InternetService', 'OnlineSecurity', 'OnlineBackup', 'DeviceProtection', 'TechSupport', 'StreamingTV', 'StreamingMovies', 'Contract', 'PaperlessBilling', 'PaymentMethod', 'MonthlyCharges', 'TotalCharges', 'Churn']."
+        }
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "analysis": "describe",
+      "level": "warning",
+      "message": "Partner, Dependents, PhoneService, PaperlessBilling, Churn: numbers or dates written as text \u2014 coerce_types before anything measures them."
+    },
+    {
+      "analysis": "target_summary",
+      "level": "warning",
+      "message": "target_summary did not run: no column named 'churn'; it has ['customerID', 'gender', 'SeniorCitizen', 'Partner', 'Dependents', 'tenure', 'PhoneService', 'MultipleLines', 'InternetService', 'OnlineSecurity', 'OnlineBackup', 'DeviceProtection', 'TechSupport', 'StreamingTV', 'StreamingMovies', 'Contract', 'PaperlessBilling', 'PaymentMethod', 'MonthlyCharges', 'TotalCharges', 'Churn']."
+    },
+    {
+      "analysis": "grain",
+      "level": "warning",
+      "message": "grain did not run: no column(s) ['customerid']; it has ['customerID', 'gender', 'SeniorCitizen', 'Partner', 'Dependents', 'tenure', 'PhoneService', 'MultipleLines', 'InternetService', 'OnlineSecurity', 'OnlineBackup', 'DeviceProtection', 'TechSupport', 'StreamingTV', 'StreamingMovies', 'Contract', 'PaperlessBilling', 'PaymentMethod', 'MonthlyCharges', 'TotalCharges', 'Churn']."
+    },
+    {
+      "analysis": "missing_values",
+      "level": "info",
+      "message": "1 column(s) hold some missing values, worst TotalCharges at 0.2%; fill_missing decides them, missing_indicators keeps the fact that they were missing."
+    }
+  ],
+  "summary_text": "Analysis of data/telco_churn/telco_customer_churn.csv \u2014 7,043 rows, 21 columns.\n\ndescribe: 21 columns over 7,043 rows: 6 boolean, 12 categorical, 3 numeric.\nmissing_values: 1 of 21 columns hold missing values; 99.8% of rows are complete.\nduplicates: 0 duplicate row(s) (0.0%); 1 key column(s) checked.\noutliers: 0 outlying value(s) across 3 numeric column(s), by iqr at 1.5.\ndistributions: 4 numeric column(s) profiled; 0 skewed beyond 1.\ncorrelations: 6 numeric pair(s) measured by pearson; 0 above |r| 0.95.\ntarget_summary: failed: no column named 'churn'; it has ['customerID', 'gender', 'SeniorCitizen', 'Partner', 'Dependents', 'tenure', 'PhoneService', 'MultipleLines', 'InternetService', 'OnlineSecurity', 'OnlineBackup', 'DeviceProtection', 'TechSupport', 'StreamingTV', 'StreamingMovies', 'Contract', 'PaperlessBilling', 'PaymentMethod', 'MonthlyCharges', 'TotalCharges', 'Churn'].\ntimeline: no date columns were found.\ngrain: failed: no column(s) ['customerid']; it has ['customerID', 'gender', 'SeniorCitizen', 'Partner', 'Dependents', 'tenure', 'PhoneService', 'MultipleLines', 'InternetService', 'OnlineSecurity', 'OnlineBackup', 'DeviceProtection', 'TechSupport', 'StreamingTV', 'StreamingMovies', 'Contract', 'PaperlessBilling', 'PaymentMethod', 'MonthlyCharges', 'TotalCharges', 'Churn'].\n\nFindings\n- warning [describe] Partner, Dependents, PhoneService, PaperlessBilling, Churn: numbers or dates written as text \u2014 coerce_types before anything measures them.\n- warning [target_summary] target_summary did not run: no column named 'churn'; it has ['customerID', 'gender', 'SeniorCitizen', 'Partner', 'Dependents', 'tenure', 'PhoneService', 'MultipleLines', 'InternetService', 'OnlineSecurity', 'OnlineBackup', 'DeviceProtection', 'TechSupport', 'StreamingTV', 'StreamingMovies', 'Contract', 'PaperlessBilling', 'PaymentMethod', 'MonthlyCharges', 'TotalCharges', 'Churn'].\n- warning [grain] grain did not run: no column(s) ['customerid']; it has ['customerID', 'gender', 'SeniorCitizen', 'Partner', 'Dependents', 'tenure', 'PhoneService', 'MultipleLines', 'InternetService', 'OnlineSecurity', 'OnlineBackup', 'DeviceProtection', 'TechSupport', 'StreamingTV', 'StreamingMovies', 'Contract', 'PaperlessBilling', 'PaymentMethod', 'MonthlyCharges', 'TotalCharges', 'Churn'].\n- info [missing_values] 1 column(s) hold some missing values, worst TotalCharges at 0.2%; fill_missing decides them, missing_indicators keeps the fact that they were missing.",
+  "recipe": {
+    "columns": {
+      "id_columns": [
+        "customerID"
+      ],
+      "date_columns": [],
+      "aggregation_columns": [
+        "SeniorCitizen",
+        "Partner",
+        "Dependents",
+        "tenure",
+        "PhoneService",
+        "PaperlessBilling",
+        "MonthlyCharges",
+        "TotalCharges",
+        "Churn"
+      ],
+      "categorical_columns": [
+        "gender",
+        "SeniorCitizen",
+        "Partner",
+        "Dependents",
+        "PhoneService",
+        "MultipleLines",
+        "InternetService",
+        "OnlineSecurity",
+        "OnlineBackup",
+        "DeviceProtection",
+        "TechSupport",
+        "StreamingTV",
+        "StreamingMovies",
+        "Contract",
+        "PaperlessBilling",
+        "PaymentMethod",
+        "Churn"
+      ],
+      "target": null
+    },
+    "cleaning": {
+      "caller": "data_engineer.tools.data_prep.prepare",
+      "steps": [
+        "normalize_columns",
+        "strip_whitespace",
+        "coerce_types",
+        {
+          "step": "fill_missing",
+          "strategy": "auto"
+        }
+      ]
+    },
+    "feature_prep": {
+      "caller": "feature_engineer.tools.feature_prep.feature_prep_caller",
+      "level": "row",
+      "id_columns": [
+        "customerID"
+      ],
+      "date_columns": [],
+      "aggregation_columns": [
+        "SeniorCitizen",
+        "Partner",
+        "Dependents",
+        "tenure",
+        "PhoneService",
+        "PaperlessBilling",
+        "MonthlyCharges",
+        "TotalCharges",
+        "Churn"
+      ],
+      "steps": [
+        "missing_indicators",
+        "frequency_encoding",
+        "one_hot_encoding",
+        "row_statistics"
+      ],
+      "options": {
+        "categorical_columns": [
+          "gender",
+          "SeniorCitizen",
+          "Partner",
+          "Dependents",
+          "PhoneService",
+          "MultipleLines",
+          "InternetService",
+          "OnlineSecurity",
+          "OnlineBackup",
+          "DeviceProtection",
+          "TechSupport",
+          "StreamingTV",
+          "StreamingMovies",
+          "Contract",
+          "PaperlessBilling",
+          "PaymentMethod",
+          "Churn"
+        ],
+        "one_hot_encoding": {
+          "max_categories": 10
+        }
+      }
+    },
+    "reasons": [
+      {
+        "step": "normalize_columns",
+        "why": "customerID, SeniorCitizen, Partner, Dependents, PhoneService and 14 other(s) are not usable as feature names."
+      },
+      {
+        "step": "strip_whitespace",
+        "why": "text columns split into levels when padding differs."
+      },
+      {
+        "step": "coerce_types",
+        "why": "Partner, Dependents, PhoneService, PaperlessBilling, Churn hold numbers or dates written as text."
+      },
+      {
+        "step": "fill_missing",
+        "why": "holes remain after the drops above; auto takes a median or a mode per column."
+      },
+      {
+        "step": "missing_indicators",
+        "why": "whether a field was filled in is itself predictive."
+      },
+      {
+        "step": "frequency_encoding",
+        "why": "one column per category, at any cardinality, no leakage."
+      },
+      {
+        "step": "one_hot_encoding",
+        "why": "few enough levels for a column each."
+      },
+      {
+        "step": "row_statistics",
+        "why": "several comparable measurements per row summarise usefully."
+      }
+    ],
+    "warnings": [
+      {
+        "analysis": "describe",
+        "level": "warning",
+        "message": "Partner, Dependents, PhoneService, PaperlessBilling, Churn: numbers or dates written as text \u2014 coerce_types before anything measures them."
+      },
+      {
+        "analysis": "target_summary",
+        "level": "warning",
+        "message": "target_summary did not run: no column named 'churn'; it has ['customerID', 'gender', 'SeniorCitizen', 'Partner', 'Dependents', 'tenure', 'PhoneService', 'MultipleLines', 'InternetService', 'OnlineSecurity', 'OnlineBackup', 'DeviceProtection', 'TechSupport', 'StreamingTV', 'StreamingMovies', 'Contract', 'PaperlessBilling', 'PaymentMethod', 'MonthlyCharges', 'TotalCharges', 'Churn']."
+      },
+      {
+        "analysis": "grain",
+        "level": "warning",
+        "message": "grain did not run: no column(s) ['customerid']; it has ['customerID', 'gender', 'SeniorCitizen', 'Partner', 'Dependents', 'tenure', 'PhoneService', 'MultipleLines', 'InternetService', 'OnlineSecurity', 'OnlineBackup', 'DeviceProtection', 'TechSupport', 'StreamingTV', 'StreamingMovies', 'Contract', 'PaperlessBilling', 'PaymentMethod', 'MonthlyCharges', 'TotalCharges', 'Churn']."
+      }
+    ]
+  }
+}
