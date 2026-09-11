@@ -91,6 +91,8 @@ console/                        the orchestration layer — chat, the requiremen
   agentic.py                    ChatAgent, RequirementAgent, CodeGeneratorAgent
   code_tracker.py               CodeTracker — records every tool call a run actually makes, and can
                                 render it as a prompt trace or as scripts/main.py on its own
+  config_ui.py                  the `cli.py configure` editor — a local page that rewrites the
+                                llms: and agents: blocks of the three configs below in place
   web_search.py                 cached DuckDuckGo search, used on a rejection
   prompts/                      chat.md, requirements.md, not_approved.md, code_generator.md
 
@@ -143,10 +145,11 @@ a caller for:
 | Ollama (local) | `ollama/` | ✅ |
 | Mistral | `mistral/` | ✅ |
 | Hugging Face Inference | `huggingface/` or `hf/` | ✅ |
+| Hugging Face (local, `transformers`) | `hf_local/` or `huggingface_local/` — `api_key` optional for public repos | ❌ |
 | Google (Gemini) | `google/` or `gemini/` | ❌ — see below |
 
 Every `llms:` block lives in one of these three files — update whichever agents you want on a
-different model:
+different model, either by hand or through [`cli.py configure`](#editing-the-configs-in-a-browser):
 
 - [`console/agentic_configurations.yaml`](console/agentic_configurations.yaml) — `chat_agent`,
   `requirement_agent`, `code_generator_agent`
@@ -158,8 +161,8 @@ different model:
 Then export whatever `api_key:` names for the entries you changed — `CLAUDE`, `OPENAI`, `MISTRAL`,
 however you name the variable — alongside or instead of `GEMINI`.
 
-Gemini has no native tool-calling in `agent-builder`, so tool-bearing agents on a `google`/`gemini`
-entry run through a manual prompted tool loop instead (`console/run.py`'s `run_with_prompted_tools`) —
+Gemini and local Hugging Face have no native tool-calling in `agent-builder`, so tool-bearing agents on
+a `google`/`gemini` or `hf_local` entry run through a manual prompted tool loop instead (`console/run.py`'s `run_with_prompted_tools`) —
 real tool execution, just driven by a `TOOL_CALL: {...}` text convention rather than the provider's own
 function-calling API. Every other provider in the table above gets the native round trip for free.
 
@@ -203,6 +206,57 @@ Then, with nothing agentic involved at all:
 ```bash
 poetry run python scripts/main.py
 ```
+
+### Editing the configs in a browser
+
+```bash
+poetry run feature-store-agent configure
+# or: python cli.py configure
+#     python cli.py configure --port 9000 --no-browser
+```
+
+Opens a local page — bound to `127.0.0.1`, nothing reachable off this machine, no dependency beyond
+what `poetry install` already put there — for editing the `llms:` and `agents:` blocks of the three
+`agentic_configurations.yaml` files without hand-editing YAML.
+
+**1 — pick a config from the dropdown.** The three configs drive different parts of the run, so each
+is edited separately. Selecting one describes it below the dropdown — change the selection and the
+description changes with it — and *Edit …* opens that config's editor:
+
+| Pick | What changes |
+|---|---|
+| **Console** | `chat_agent` (the front door — every turn you type), `requirement_agent` (the gate that decides whether a run may start), and `code_generator_agent` (reads all eight stages' outputs and writes `scripts/main.py`). |
+| **Data engineer** | `data_reader_agent`, `data_analyzer_agent`, `data_preprocessor_agent`, `data_quality_agent` — reading, profiling, cleaning and quality-checking the dataset. Also holds the judgers and `rag_data_engineer_decider_agent`, which `console/run.py` leaves out of `STAGES`. |
+| **Feature engineering** | `problem_analyzer_agent`, `missing_value_agent`, `feature_prep_agent`, `feature_selection_agent` — framing the problem, imputing, building features and selecting them. |
+
+**2 — the editor opens on that config**, LLMs first, agents under them.
+
+**3 — LLMs.** Every entry expands into `model`, `api_key`, `max_tokens`, `type` and an optional
+`temperature`. `model` must be `<provider>/<model-id>` with a provider from the table above, and
+`api_key` is the *name* of the environment variable holding the key (`GEMINI`, `CLAUDE`, …) or the key
+itself.
+
+**4 — add or remove an LLM.** *+ Add LLM* starts a new entry with all four required fields already
+filled in, so it is valid the moment it appears; edit it from there. Removing one that an agent still
+names is refused before anything is written.
+
+**5 — agents.** Same three operations. `type` comes from the agent classes `agent-builder`
+registers, `llm` and `substitute_llm` are picked from the LLMs above, and `dependency_agent` and
+`tools` are ticked off the other agents and this file's own `tools:` block. **`prompt_path` is
+chosen with *Browse…***, which opens a file picker over this repository — the path is written
+relative to that config's own directory, which is where `agent-builder` resolves it from.
+
+Anything the form has no box for (`responsiblity_prompt`, `mcp_servers`, a `thresholds:` block) is
+kept in a small YAML box on the entry, so nothing already in the file is dropped by saving.
+
+**Saving** rewrites only `llms:` and `agents:`. The file header, `dbs:`, `embeddings:`, `tools:`,
+`orchestrators:` and `pipeline:` are copied back byte for byte, and inside the two edited blocks an
+entry that came back unchanged is re-emitted as its own original lines — so every comment in these
+files survives an edit somewhere else in them. A submission that could not be built from
+(`max_tokens` that isn't a number, an agent naming an LLM that isn't there, an agent with no prompt)
+is refused with the reason and **nothing is written**. Things that are odd but still valid — a
+`prompt_path` pointing at a file that doesn't exist yet, an agent removed while `pipeline:` still
+names it — are saved and reported as warnings.
 
 ## Known limitations
 
