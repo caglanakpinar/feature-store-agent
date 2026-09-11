@@ -41,7 +41,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from uilts.logger import logger
+from utils.logger import logger
 
 DUCKDUCKGO_HTML_URL = "https://html.duckduckgo.com/html/"
 DEFAULT_MAX_RESULTS = 8

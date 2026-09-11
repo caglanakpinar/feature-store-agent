@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from data_engineer.tools.dataset import BOOLEANS, DECIMAL, INTEGER, MISSING_VALUES, Dataset, read_dataset
-from uilts.logger import logger
+from utils.logger import logger
 
 
 # What `coerce_types` casts to when a schema names a type. "auto" is not here: it is the inference

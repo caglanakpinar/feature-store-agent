@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from agent_builder import build_sql_db
-from uilts.logger import logger
+from utils.logger import logger
 
 
 # The config directory a `db` name is looked up in when the caller names one but no `configs`, so

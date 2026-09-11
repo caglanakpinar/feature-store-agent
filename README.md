@@ -145,6 +145,7 @@ a caller for:
 | Ollama (local) | `ollama/` | ✅ |
 | Mistral | `mistral/` | ✅ |
 | Hugging Face Inference | `huggingface/` or `hf/` | ✅ |
+| Hugging Face (local, `transformers`) | `hf_local/` or `huggingface_local/` — `api_key` optional for public repos | ❌ |
 | Google (Gemini) | `google/` or `gemini/` | ❌ — see below |
 
 Every `llms:` block lives in one of these three files — update whichever agents you want on a
@@ -160,8 +161,8 @@ different model, either by hand or through [`cli.py configure`](#editing-the-con
 Then export whatever `api_key:` names for the entries you changed — `CLAUDE`, `OPENAI`, `MISTRAL`,
 however you name the variable — alongside or instead of `GEMINI`.
 
-Gemini has no native tool-calling in `agent-builder`, so tool-bearing agents on a `google`/`gemini`
-entry run through a manual prompted tool loop instead (`console/run.py`'s `run_with_prompted_tools`) —
+Gemini and local Hugging Face have no native tool-calling in `agent-builder`, so tool-bearing agents on
+a `google`/`gemini` or `hf_local` entry run through a manual prompted tool loop instead (`console/run.py`'s `run_with_prompted_tools`) —
 real tool execution, just driven by a `TOOL_CALL: {...}` text convention rather than the provider's own
 function-calling API. Every other provider in the table above gets the native round trip for free.
 

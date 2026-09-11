@@ -34,7 +34,7 @@ python = "^3.10"
 
 # The only hard runtime dependency. Two things in it are imported at module level, so nothing here
 # runs without it: `agent_builder.build_sql_db`, which `dataset.py` connects every SQL source with,
-# and `uilts.logger`, which every tool logs through.
+# and `utils.logger`, which every tool logs through.
 #
 # Its database drivers and vector stores are its own extras, not dependencies of this project, and
 # they are needed only for the backend actually in use. `connector_db` reaches all of them through
@@ -44,7 +44,10 @@ python = "^3.10"
 #     poetry run pip install "agent-builder[postgres] @ git+https://github.com/caglanakpinar/agentic_ai_builder.git"
 #
 # ...with `postgres`, `mysql`, `duckdb`, `bigquery`, `snowflake`, `faiss` or `all` in the brackets.
-agent-builder = { git = "https://github.com/caglanakpinar/agentic_ai_builder.git" }
+agent-builder = { git = "https://github.com/caglanakpinar/agentic_ai_builder.git", branch = "main" }
+# The `hf_local` caller's `models/llms.py` imports `peft` at module level without declaring it, so no
+# LLM caller — Gemini included — imports without it. Drop this once agent-builder lists `peft` itself.
+peft = ">=0.17"
 
 # The two file formats `read_dataset` cannot handle with the standard library. Both are imported
 # inside the reader that needs them rather than at the top of `dataset.py`, so a project that reads

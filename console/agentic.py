@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from agent_builder import build_agent, build_vector_db, load_configs
-from uilts.logger import logger
+from utils.logger import logger
 
 # `agentic_configurations.yaml` lives at the root of this package.
 CONFIG_DIR = Path(__file__).resolve().parent

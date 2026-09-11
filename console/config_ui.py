@@ -17,7 +17,7 @@ An entry that *did* change keeps the comment on its name line and any comment bl
 the rest of its body is re-emitted from the submitted values.
 
 Nothing here talks to a model or imports `agent_builder` — it reads and writes YAML, and the field
-lists it validates against are the ones `uilts.configs` parses (`LLMConfigs`, `AgentConfigs`) and the
+lists it validates against are the ones `utils.configs` parses (`LLMConfigs`, `AgentConfigs`) and the
 agent classes `builder.factory.AGENT_TYPES` registers. The server binds to 127.0.0.1 only, and the
 file browser refuses any path outside this repository.
 """
@@ -124,7 +124,12 @@ LLM_PROVIDERS = [
     "mistral",
     "huggingface",
     "hf",
+    "huggingface_local",
+    "hf_local",
 ]
+
+# Providers that run the model in-process: a public Hub repo needs no token, so `api_key` may be empty.
+KEYLESS_PROVIDERS = {"huggingface_local", "hf_local"}
 
 LLM_TYPES = ["generator", "judger", "retriever", "tool caller", "tool generator"]
 
@@ -474,7 +479,7 @@ def normalise_llm(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         raise ConfigError(f"{name}: a name must start with a letter and hold no spaces.")
 
     value: dict[str, Any] = {}
-    for required in ("model", "api_key", "type"):
+    for required in ("model", "type"):
         given = _clean(payload.get(required))
         if not given:
             raise ConfigError(f"{name}: `{required}` is required.")
@@ -490,6 +495,12 @@ def normalise_llm(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             f"{name}: `{provider}` is not a provider agent-builder has a caller for — "
             f"one of {', '.join(sorted(set(LLM_PROVIDERS)))}."
         )
+
+    api_key = _clean(payload.get("api_key"))
+    if api_key:
+        value["api_key"] = api_key
+    elif provider not in KEYLESS_PROVIDERS:
+        raise ConfigError(f"{name}: `api_key` is required.")
 
     max_tokens = _clean(payload.get("max_tokens"))
     if not max_tokens:
@@ -1238,7 +1249,7 @@ function llmSection() {
       textField(card, "model", "model", { required: true, list: "provider-models",
         placeholder: "gemini/gemini-3.1-flash-lite", hint: "provider/model-id" }),
       textField(card, "api_key", "api_key", { required: true, placeholder: "GEMINI",
-        hint: "env var name, or the key itself" }),
+        hint: "env var name, or the key itself — optional for hf_local" }),
       textField(card, "max_tokens", "max_tokens", { required: true, placeholder: "16000",
         hint: "thinking counts against it" }),
       selectField(card, "type", "type", detail.available.llm_types, { required: true }),

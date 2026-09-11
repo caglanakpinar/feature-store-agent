@@ -79,7 +79,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from data_engineer.tools.dataset import BOOLEANS, MISSING_VALUES, Dataset, read_dataset
-from uilts.logger import logger
+from utils.logger import logger
 
 
 MISSING = frozenset(value.lower() for value in MISSING_VALUES)
