@@ -30,6 +30,7 @@ a caller still holds the state before the step ran.
 import csv
 import inspect
 import math
+import re
 import statistics
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -50,13 +51,72 @@ CASTS: dict[str, Callable[[Any], Any]] = {
     "bool": lambda value: _as_bool(value),
     "date": lambda value: _as_datetime(value).date(),
     "datetime": lambda value: _as_datetime(value),
+    "number": lambda value: _as_written_number(value),
 }
 
 # Date formats tried after ISO-8601, in the order they are worth trying: the unambiguous one first,
 # then day-first, which is what a European export writes.
-DATE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S")
+DATE_FORMATS = (
+    "%Y-%m-%d",
+    "%Y/%m/%d",
+    "%d/%m/%Y",
+    "%d-%m-%Y",
+    "%m/%d/%Y",
+    "%Y-%m-%d %H:%M:%S",
+    "%d %b %Y",
+    "%b %d, %Y",
+    "%b %d %Y",
+    "%B %d, %Y",
+    "%d %B %Y",
+)
 
 MISSING = frozenset(value.lower() for value in MISSING_VALUES)
+
+# A number written the way a person writes one: with a currency sign, thousands separators, a
+# percent sign or a unit after it — "$1,250", "1,850", "1850 sqft", "12.5%" — or as a range or a
+# floor: "3-5 years" (4), "5+ years" (5), "[70-80)" (75). At most one short word follows the digits
+# (no spaces): "12 Main St" is an address, not a number. A range must rise (a month-year such as
+# "03-2021" is not one that does).
+WRITTEN_NUMBER = re.compile(
+    r"^[\[\(]?[\$€£¥]?\s*(?P<low>[-+]?\d[\d,]*(?:\.\d+)?)(?:\s*[-–]\s*(?P<high>\d[\d,]*(?:\.\d+)?))?\+?[\]\)]?\s*(?P<unit>%|[A-Za-z²³/\.]{1,12})?$"
+)
+# The words a yes/no column is written in. A column of these is a flag, even when it spells yes
+# three ways ("Y", "yes", "TRUE").
+FLAG_WORDS = {
+    "y": True,
+    "yes": True,
+    "t": True,
+    "true": True,
+    "n": False,
+    "no": False,
+    "f": False,
+    "false": False,
+}
+# What a column holds in place of a value it does not have, besides the empty string.
+NO_VALUE = frozenset(
+    {
+        "n/a",
+        "na",
+        "n.a.",
+        "none",
+        "null",
+        "nan",
+        "nil",
+        "-",
+        "--",
+        "---",
+        "?",
+        "unknown",
+        "missing",
+        "not available",
+        "not provided",
+        "tbd",
+        "",
+    }
+)
+# Numbers that stand for "unknown" when they sit alone outside the range of everything else in a
+# column: -999, 9999, 99...
+SENTINEL_VALUES = (-1, -9, -99, -999, -9999, -99999, 99, 999, 9999, 99999, 999999, 0)
 
 
 @dataclass
@@ -628,6 +688,291 @@ def transform(
     return _step(prepared, "transform", _with(data, rows, columns), {"added": added})
 
 
+# ---- placeholders and split columns
+# -------------------------------------------------------------------
+
+
+def find_sentinels(
+    data: Dataset, columns: Sequence[str] | None = None, min_share: float = 0.005
+) -> dict[str, dict[str, Any]]:
+    """The numbers that stand for "unknown": a value like -999, 99 or 9999 that fills a visible share of a measurement column and sits outside
+    the range of every other value in it.
+
+    A code column (fewer than 20 distinct values) is skipped, since 99 may be one of its codes; a
+    legitimate zero is not outside the range of a column that has other zeros and positives, so it
+    is left alone. Returns `{column: {"value": ..., "rows": ..., "share": ...}}`.
+    """
+    found: dict[str, dict[str, Any]] = {}
+    for column in _columns(data, columns):
+        values = [value for value in data.column(column) if not _is_missing(value)]
+        if (
+            len(values) < 100
+            or not all(_is_number(value) for value in values)
+            or len({v for v in values}) < 20
+        ):
+            continue
+        counts: dict[Any, int] = {}
+        for value in values:
+            counts[value] = counts.get(value, 0) + 1
+        for candidate in SENTINEL_VALUES:
+            rows = counts.get(candidate, 0)
+            if rows < max(5, min_share * len(values)):
+                continue
+            rest = [value for value in values if value != candidate]
+            if not rest:
+                continue
+            if candidate == 0:
+                # Zeros belong to a column that has other small values; one is a placeholder only
+                # when it is nowhere near the rest (a 0 latitude).
+                first, third = (
+                    statistics.quantiles(rest, n=4)[0],
+                    statistics.quantiles(rest, n=4)[2],
+                )
+                outside = candidate < first - 3 * (third - first) or candidate > third + 3 * (
+                    third - first
+                )
+            else:
+                outside = candidate < min(rest) or candidate > max(rest)
+            if outside:
+                found[column] = {
+                    "value": candidate,
+                    "rows": rows,
+                    "share": round(rows / len(values), 4),
+                }
+                break
+    return found
+
+
+def replace_sentinels(
+    source: Dataset | Prepared,
+    columns: Sequence[str] | None = None,
+    values: Sequence[Any] | None = None,
+    min_share: float = 0.005,
+) -> Prepared:
+    """Turn the numbers that mean "unknown" into holes, so a later stage can flag and fill them instead of treating -999 as an amount.
+
+    Without `values` each numeric column is checked by `find_sentinels` and the one placeholder it
+    holds, if any, is replaced. With `values` those exact numbers are replaced in `columns` (every
+    numeric column when none are named), whether or not they look like placeholders.
+
+    Args:
+        source: The dataset, or the `Prepared` a previous step returned.
+        columns: Columns to look in. Defaults to every column.
+        values: Placeholders to replace, when you know them. Detected per column when omitted.
+        min_share: The smallest share of a column's rows a detected placeholder must fill.
+
+    Returns:
+        The dataset with the placeholders now missing, and per column which value was replaced and how many rows held it.
+    """
+    prepared = _prepared(source)
+    data = prepared.data
+    if values:
+        wanted = {
+            column: {"value": value}
+            for column in _columns(data, columns)
+            if _is_numeric(data, column)
+            for value in values
+        }
+        plan = {column: [entry["value"] for entry in [wanted[column]]] for column in wanted}
+        plan = {column: list(values) for column in wanted}
+    else:
+        plan = {
+            column: [info["value"]]
+            for column, info in find_sentinels(data, columns, min_share).items()
+        }
+
+    rows = [dict(row) for row in data.rows]
+    replaced: dict[str, dict[str, Any]] = {}
+    for column, targets in plan.items():
+        count = 0
+        for row in rows:
+            if _is_number(row.get(column)) and row[column] in targets:
+                row[column] = None
+                count += 1
+        if count:
+            replaced[column] = {"values": targets, "rows": count}
+
+    return _step(prepared, "replace_sentinels", _with(data, rows), {"replaced": replaced})
+
+
+def find_complementary(
+    data: Dataset, columns: Sequence[str] | None = None, min_share: float = 0.05
+) -> list[list[str]]:
+    """Pairs of columns that are filled on disjoint rows and together cover (nearly) all of them: one column, renamed part-way through.
+
+    Only two numeric columns, or two text columns, are paired, each present on at least `min_share`
+    of the rows, none present on the same row as the other, the two covering 90% of the rows; two
+    numeric ones must also be of the same magnitude (medians within 5x).
+    """
+    names = _columns(data, columns)
+    total = len(data.rows) or 1
+    present = {
+        c: {i for i, row in enumerate(data.rows) if not _is_missing(row.get(c))} for c in names
+    }
+    kinds = {c: "number" if _is_numeric(data, c) else "text" for c in names if present[c]}
+    pairs: list[list[str]] = []
+    used: set[str] = set()
+    for i, a in enumerate(names):
+        for b in names[i + 1 :]:
+            if a in used or b in used or a not in kinds or b not in kinds or kinds[a] != kinds[b]:
+                continue
+            if (
+                len(present[a]) < min_share * total
+                or len(present[b]) < min_share * total
+                or present[a] & present[b]
+            ):
+                continue
+            if len(present[a] | present[b]) < 0.9 * total:
+                continue
+            if kinds[a] == "number":
+                med_a = statistics.median(v for v in data.column(a) if not _is_missing(v))
+                med_b = statistics.median(v for v in data.column(b) if not _is_missing(v))
+                if med_a and med_b and not (0.2 <= abs(med_a / med_b) <= 5):
+                    continue
+            pairs.append([a, b])
+            used.update((a, b))
+    return pairs
+
+
+def merge_complementary(
+    source: Dataset | Prepared, columns: Sequence[str] | None = None
+) -> Prepared:
+    """Merge columns that are filled on different rows into one: `amt` up to June and `amount_usd` after it are one amount.
+
+    The first column of each pair keeps its name and takes the other's values where it has none; the
+    other is dropped. Pairs are found by `find_complementary` unless `columns` names exactly two to
+    merge.
+
+    Args:
+        source: The dataset, or the `Prepared` a previous step returned.
+        columns: Two columns to merge, when you know which. Pairs are detected when omitted.
+
+    Returns:
+        The dataset with each pair merged, and which columns were.
+    """
+    prepared = _prepared(source)
+    data = prepared.data
+    pairs = [list(_columns(data, columns))] if columns else find_complementary(data)
+    if columns and len(pairs[0]) != 2:
+        raise ValueError("merge_complementary takes exactly two columns to merge.")
+
+    rows = [dict(row) for row in data.rows]
+    dropped: set[str] = set()
+    for keep, other in pairs:
+        for row in rows:
+            if _is_missing(row.get(keep)):
+                row[keep] = row.get(other)
+        dropped.add(other)
+
+    remaining = [c for c in data.columns if c not in dropped]
+    for row in rows:
+        for column in dropped:
+            row.pop(column, None)
+    return _step(
+        prepared,
+        "merge_complementary",
+        _with(data, rows, remaining),
+        {"merged": [{"kept": a, "merged_in": b} for a, b in pairs]},
+    )
+
+
+# ---- ordered words
+# ------------------------------------------------------------------------------------
+
+
+# Scales people answer in, lowest first; each rank lists the spellings of it. A column is read as
+# one of these when nearly all its values belong to it.
+ORDINAL_SCALES: dict[str, list[set[str]]] = {
+    "agreement": [
+        {"strongly disagree"},
+        {"disagree"},
+        {"neither agree nor disagree", "neutral", "neither"},
+        {"agree"},
+        {"strongly agree"},
+    ],
+    "satisfaction": [
+        {"very dissatisfied"},
+        {"dissatisfied"},
+        {"neutral", "neither satisfied nor dissatisfied"},
+        {"satisfied"},
+        {"very satisfied"},
+    ],
+    "frequency": [{"never"}, {"rarely"}, {"sometimes", "occasionally"}, {"often"}, {"always"}],
+    "quality": [
+        {"very poor", "terrible"},
+        {"poor", "bad"},
+        {"fair", "average"},
+        {"good"},
+        {"very good"},
+        {"excellent", "outstanding"},
+    ],
+    "level": [{"very low"}, {"low"}, {"medium", "moderate", "mid"}, {"high"}, {"very high"}],
+}
+
+
+def find_ordinal_scales(
+    data: Dataset, columns: Sequence[str] | None = None, coverage: float = 0.8
+) -> dict[str, dict[str, Any]]:
+    """Text columns whose values are (nearly all) the labels of one ordered scale: `{column: {"scale": name, "unmapped": n}}`."""
+    found: dict[str, dict[str, Any]] = {}
+    for column in _columns(data, columns):
+        values = [
+            str(value).strip().lower()
+            for value in data.column(column)
+            if isinstance(value, str) and not _is_missing(value)
+        ]
+        if len(values) < 30:
+            continue
+        best: tuple[float, str] | None = None
+        for name, scale in ORDINAL_SCALES.items():
+            known = {label for ranks in scale for label in ranks}
+            share = sum(1 for value in values if value in known) / len(values)
+            used = len({value for value in values if value in known})
+            if share >= coverage and used >= 3 and (best is None or share > best[0]):
+                best = (share, name)
+        if best:
+            found[column] = {
+                "scale": best[1],
+                "unmapped": sum(
+                    1
+                    for value in values
+                    if value not in {label for ranks in ORDINAL_SCALES[best[1]] for label in ranks}
+                ),
+            }
+    return found
+
+
+def ordinal_scales(source: Dataset | Prepared, columns: Sequence[str] | None = None) -> Prepared:
+    """Replace the words of an ordered scale — "Strongly disagree" ... "Strongly agree" — with their ranks, 1 for the lowest.
+
+    Read as unordered text those answers lose the one thing they say: that one is more than another.
+    A label that belongs to no known rank ("Prefer not to say") becomes a hole, so the missing-value
+    stage can flag it.
+
+    Args:
+        source: The dataset, or the `Prepared` a previous step returned.
+        columns: Columns to look in. Defaults to every column; each is converted only when it clearly is one of the known scales.
+
+    Returns:
+        The dataset with the converted columns, and for each which scale it was read as and how many values fitted none.
+    """
+    prepared = _prepared(source)
+    data = prepared.data
+    plan = find_ordinal_scales(data, columns)
+    rows = [dict(row) for row in data.rows]
+    for column, info in plan.items():
+        rank = {
+            label: position + 1
+            for position, labels in enumerate(ORDINAL_SCALES[info["scale"]])
+            for label in labels
+        }
+        for row in rows:
+            value = row.get(column)
+            if isinstance(value, str):
+                row[column] = rank.get(value.strip().lower())
+    return _step(prepared, "ordinal_scales", _with(data, rows), {"converted": plan})
+
+
 # ---- running a list of steps ---------------------------------------------------------------------------
 
 
@@ -643,18 +988,30 @@ STEPS: dict[str, Callable[..., Prepared]] = {
     "drop_columns": drop_columns,
     "clip_outliers": clip_outliers,
     "transform": transform,
+    "replace_sentinels": replace_sentinels,
+    "merge_complementary": merge_complementary,
+    "ordinal_scales": ordinal_scales,
 }
 
-# The order the steps are worth running in, and what `prepare` runs when it is given none. Naming and
-# types come first because every later step reads the values: a median cannot be taken over strings,
-# and a duplicate is only visible once its whitespace is gone.
+# The order the steps are worth running in, and what `prepare` runs when it is given none. Types come
+# first because every later step reads the values: a number cannot be compared while it is a string,
+# a placeholder is only visible once the column is a number, and a duplicate is only visible once its
+# whitespace is gone.
+#
+# What a bare call does is what a small model's call does, so it is the set that is safe on any table
+# without knowing the question: none of these changes what a column means, and none drops one that
+# carries information. Left out on purpose: `fill_missing` (the missing-value stage flags a hole
+# before it fills it, and a hole filled here is a flag it can no longer write), `clip_outliers`,
+# `transform` and `drop_columns` (each needs a column or a method somebody chose), and
+# `normalize_columns` (a renamed column is one the target's name no longer matches).
 DEFAULT_STEPS = (
-    "normalize_columns",
     "strip_whitespace",
     "coerce_types",
+    "ordinal_scales",
+    "replace_sentinels",
+    "merge_complementary",
     "drop_duplicates",
     "drop_constant_columns",
-    "fill_missing",
 )
 
 
@@ -689,6 +1046,14 @@ def prepare(
     return prepared
 
 
+def _beside(source: Any, suffix: str) -> str | None:
+    """`<source>__<suffix>.csv` next to the input, so stages chain by path; None when the source is not a file on disk."""
+    if not isinstance(source, (str, Path)) or not Path(source).is_file():
+        return None
+    path = Path(source)
+    return str(path.with_name(f"{path.stem}__{suffix}.csv"))
+
+
 def data_prep_caller(
     data_source: str | None = None,
     steps: Sequence[str | dict[str, Any]] | None = None,
@@ -711,7 +1076,9 @@ def data_prep_caller(
         options: Per-step arguments keyed by step name, for a step named as a plain string in `steps`
             — `{"fill_missing": {"strategy": "median"}, "clip_outliers": {"method": "iqr"}}`. Inline
             arguments already on a step in `steps` take precedence over this.
-        output_path: Where to write the prepared dataset as CSV, for the next stage to read.
+        output_path: Where to write the prepared dataset as CSV, for the next stage to read. Defaults
+            to `<source>__prepared.csv` beside the input, so a call that names only a source still
+            leaves a table to read; pass an empty string to write nothing.
         limit: Read at most this many rows, for a first pass over a large source.
 
     Returns:
@@ -731,6 +1098,8 @@ def data_prep_caller(
             resolved.append({"step": name, **extra, **inline})
 
         prepared = prepare(data, resolved)
+        if output_path is None:
+            output_path = _beside(data_source, "prepared")
         written = write_csv(prepared, output_path) if output_path else None
         return {"status": "ok", **prepared.to_dict(limit=10), "output_path": written}
     except Exception as error:
@@ -887,18 +1256,90 @@ def _inferred(data: Dataset, column: str) -> str | None:
     """
     present = [value for value in data.column(column) if not _is_missing(value)]
     texts = [value for value in present if isinstance(value, str)]
-    if not texts or len(texts) != len(present):  # already typed, or a mix this cannot speak for
+    if texts and len(texts) != len(present):
+        # The reader has already turned "TRUE" into a boolean and left "Y" as text: a mix, but of
+        # flags and flags written another way.
+        if all(
+            isinstance(value, bool) for value in present if not isinstance(value, str)
+        ) and _is_flag_column(texts):
+            return "bool"
+        # The reader has already turned "2,403" into a number and left "1971 sqft" as text: a mix,
+        # but of numbers and numbers written out.
+        mixed = all(
+            _is_number(value) for value in present if not isinstance(value, str)
+        ) and _written_numbers([text.strip() for text in texts])
+        return "number" if mixed else None
+    if not texts:  # already typed
         return None
 
     stripped = [text.strip() for text in texts]
-    if all(text.lower() in BOOLEANS for text in stripped):
+    if all(text.lower() in BOOLEANS for text in stripped) or _is_flag_column(stripped):
         return "bool"
     if all(INTEGER.match(text) for text in stripped):
         return "int"
     if all(DECIMAL.match(text) for text in stripped):
         return "float"
+    if _written_numbers(stripped):
+        return "number"
 
     return None
+
+
+def _is_flag_column(texts: Sequence[str]) -> bool:
+    """Whether every value is a yes/no word — and at least one is a word, so a column of 0s and 1s stays the numbers it is."""
+    words = {text.strip().lower() for text in texts}
+    return bool(words) and words <= (set(FLAG_WORDS) | {"0", "1"}) and bool(words & set(FLAG_WORDS))
+
+
+def _written_value(text: str) -> float | None:
+    """The number a written one stands for — `"$1,250"` 1250, `"3-5 years"` 4, `"5+"` 5, `"[70-80)"` 75 — or None when `text` is not one.
+
+    A range counts only when it rises: "2021-03" is a year and a month, not the middle of 2021 and
+    3.
+    """
+    matched = WRITTEN_NUMBER.match(text)
+    if not matched:
+        return None
+    low = float(matched["low"].replace(",", ""))
+    if matched["high"] is None:
+        return low
+    high = float(matched["high"].replace(",", ""))
+    return (low + high) / 2 if high > low else None
+
+
+def _written_numbers(texts: Sequence[str]) -> bool:
+    """Whether the values are numbers written with a sign, separators, a unit or as a range, bar the ones standing in for 'no value'.
+
+    A column is read this way only when it is clearly one: at least 95% of the values that are not
+    placeholders are numbers, and they carry a handful of distinct units at most — so a column of
+    free text with the odd digit in it stays text, while "Entry level" among "3-5 years" and "10
+    yrs" is one value in a hundred that cannot be read, and becomes a hole.
+    """
+    numeric, other, units = 0, 0, set()
+    for text in texts:
+        if text.lower() in NO_VALUE:
+            continue
+        if _written_value(text) is None:
+            other += 1
+            continue
+        numeric += 1
+        units.add((WRITTEN_NUMBER.match(text)["unit"] or "").lower())
+    return numeric >= 1 and other <= 0.05 * (numeric + other) and len(units) <= 3
+
+
+def _as_written_number(value: Any) -> Any:
+    """`"$1,250"` -> 1250, `"1850 sqft"` -> 1850, `"12.5%"` -> 12.5, `"3-5 years"` -> 4, `"N/A"` -> missing. An integer stays an integer."""
+    if _is_number(value):
+        return value
+    text = str(value).strip()
+    if text.lower() in NO_VALUE:
+        return None
+    number = _written_value(text)
+    if number is None:
+        raise ValueError(
+            f"{value!r} is not a number written with a sign, separators, a unit or as a range."
+        )
+    return int(number) if number.is_integer() else number
 
 
 def _as_bool(value: Any) -> bool:

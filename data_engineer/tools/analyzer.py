@@ -67,7 +67,9 @@ Register the callers in `agentic_configurations.yaml` the way the other tools ar
           required: false
 """
 
+import functools
 import inspect
+import itertools
 import json
 import math
 import re
@@ -91,6 +93,9 @@ BOOLEAN_TOKENS = frozenset({*BOOLEANS, "0", "1", "yes", "no", "y", "n", "t", "f"
 # A column named like a key is one, whatever its values look like: `customer_id` holding integers is
 # still an entity, and averaging it would be meaningless.
 ID_NAME = re.compile(r"(^|_)(id|key|code|uuid|guid)$")
+# The same names written in camelCase: PassengerId, customerID, orderKey. (Matched against the name
+# as written, not lower-cased.)
+CAMEL_ID_NAME = re.compile(r"(?<=[a-z0-9])(Id|ID|Key|Uuid|UUID|Guid|GUID)$")
 
 DATE_FORMATS = (
     "%Y-%m-%d %H:%M:%S",
@@ -103,6 +108,10 @@ DATE_FORMATS = (
     "%d.%m.%Y",
     "%b %d %Y",
     "%d %b %Y",
+    "%b %d, %Y",
+    "%B %d, %Y",
+    "%B %d %Y",
+    "%d %B %Y",
 )
 
 DAY = 86400.0  # seconds, the unit every date-derived number below is reported in
@@ -115,6 +124,27 @@ SKEWED = 1.0  # |skew| a numeric column needs before a log transform is worth re
 HEAVY = 2.0  # ... and before bucketing it is worth recommending as well
 REDUNDANT = 0.95  # |r| above which two columns are carrying the same information
 LEAKAGE = 0.98  # ... and above which a feature is predicting the target too well to be honest
+# A column recorded after the outcome rarely matches it row for row: churners were last seen 20-90
+# days ago and everyone else 0-25. So a column is also a suspect when, on its own, it ranks a binary
+# target this well either way up (ROC AUC), or a numeric target this well (Spearman) — the same bars
+# `feature_selection` applies, so the two stages agree on what is a leak. The columns found here are
+# what prep drops before features are built.
+LEAKAGE_AUC = 0.95
+LEAKAGE_RANK = 0.97
+AFTER_THE_FACT = re.compile(
+    r"(^|_)(next|after|post|future|ahead|following|outcome|result|resolution)(_|$)", re.IGNORECASE
+)  # a name that says "measured later"
+# a two-valued column is a near-certain rule for a binary target when one value holds this share of
+# positives, on at least...
+FLAG_PRECISION = 0.9
+FLAG_SUPPORT = 0.02  # ...this share of the rows, and at five times the base rate
+# a categorical column is a regrouping of a multiclass target when, within each class, this share of
+# rows holds its commonest level
+PURITY = 0.98
+# a category is judged by the target's rate in each level only up to this many levels, with at
+# least...
+CATEGORY_LEVELS = 30
+CATEGORY_ROWS_PER_LEVEL = 20  # ...this many rows in each on average
 
 LEVELS = ("info", "warning", "risk")  # what a finding can be, in the order a summary should read them
 
@@ -292,6 +322,7 @@ def column_roles(
         and kind not in ("empty", "constant")
         and (
             ID_NAME.search(column.strip().lower())
+            or CAMEL_ID_NAME.search(column.strip())
             or (rows > 1 and kind in ("categorical", "text") and _distinct(data, column) == rows)
         )
     ]
@@ -870,12 +901,39 @@ def target_summary(source: Any, target: str | None = None, top: int = 10) -> Ana
     details["associations"] = associations[: max(int(top), 0)]
 
     leaking = [item for item in associations if item["association"] >= LEAKAGE]
-    if leaking:
+    suspects = _leakage_suspects(data, target, numbers, kind) if numbers else []
+    suspects += [
+        {"column": item["column"], "measure": item["measure"], "value": item["value"]}
+        for item in leaking
+        if item["column"] not in {suspect["column"] for suspect in suspects}
+    ]
+    if not numbers and kind not in ("numeric", "boolean"):
+        suspects += _purity_suspects(data, target)
+    details["leakage_suspects"] = suspects
+    named = [
+        column
+        for column in data.columns
+        if column != target
+        and AFTER_THE_FACT.search(column)
+        and column not in {suspect["column"] for suspect in suspects}
+    ]
+    details["after_the_fact_names"] = named
+    if named:
+        findings.append(
+            Finding(
+                "warning",
+                f"{_listed(named)}: named like {'it is' if len(named) == 1 else 'they are'} measured after the point being predicted "
+                f"(next, after, post, future...). A feature has to be known when the prediction is made; a value from the period it predicts is leakage.",
+            )
+        )
+    if suspects:
         findings.append(
             Finding(
                 "risk",
-                f"{_listed([item['column'] for item in leaking])}: an almost perfect predictor of "
-                f"{target}. A column computed from the answer leaks it — check before building on it.",
+                f"{_listed([item['column'] for item in suspects])}: predicts {target} almost perfectly on its own "
+                f"({', '.join(f'{item['column']} {item['measure']} {item['value']}' for item in suspects[:4])}). "
+                f"A column recorded after the outcome, or computed from it, leaks the answer — drop_columns it before building features, "
+                f"unless it really is known at prediction time.",
             )
         )
 
@@ -990,6 +1048,43 @@ def timeline(
     )
 
 
+def _entity_columns(
+    data: Dataset, ids: Sequence[str], dates: Sequence[str], kinds: dict[str, str]
+) -> list[str]:
+    """The columns an entity is keyed by — which is not every id column at once.
+
+    An id that is different on every row (a transaction id, a serial) names a row, not an entity,
+    and taken together with the others it makes every row its own entity, so no history is ever
+    found. The entity is the first id that repeats. With no such id but a date, it is the smallest
+    set of low-cardinality columns that, with the date, identify a row (`store` and `sku` in a daily
+    sales table) and have history.
+    """
+    rows = len(data.rows)
+    repeating = [column for column in ids if 2 <= _distinct(data, column) <= 0.5 * rows]
+    if repeating:
+        return [repeating[0]]
+    if dates and rows >= 50:
+        pool = [
+            column
+            for column, kind in kinds.items()
+            if kind == "categorical" and column not in dates and 2 <= _distinct(data, column) <= 100
+        ][:8]
+        for size in (1, 2):
+            for combo in itertools.combinations(pool, size):
+                entities = {
+                    tuple(_hashable(row.get(column)) for column in combo) for row in data.rows
+                }
+                if rows / max(len(entities), 1) < 3:
+                    continue
+                identified = {
+                    tuple(_hashable(row.get(column)) for column in (*combo, dates[0]))
+                    for row in data.rows
+                }
+                if len(identified) >= 0.95 * rows:
+                    return list(combo)
+    return list(ids)
+
+
 def grain(
     source: Any,
     id_columns: Sequence[str] | None = None,
@@ -1011,8 +1106,13 @@ def grain(
     """
     data = _dataset(source)
     roles = column_roles(data, id_columns, date_columns)
-    ids, dates = roles["id_columns"], roles["date_columns"]
+    dates = roles["date_columns"]
     rows = len(data.rows)
+    ids = (
+        _entity_columns(data, roles["id_columns"], dates, column_kinds(data))
+        if not id_columns
+        else roles["id_columns"]
+    )
 
     if not ids:
         return Analysis(
@@ -1072,7 +1172,8 @@ def grain(
         ),
         details={
             "rows": rows,
-            "id_columns": ids,
+            "id_columns": roles["id_columns"],
+            "entity_columns": ids,
             "date_columns": dates,
             "entities": len(groups),
             "verdict": verdict,
@@ -1617,7 +1718,17 @@ def _as_datetime(value: Any) -> datetime | None:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return None  # a bare number is a measurement here; an epoch has to arrive as text
 
-    text = str(value).strip()
+    return _text_as_datetime(str(value).strip())
+
+
+@functools.lru_cache(maxsize=200_000)
+def _text_as_datetime(text: str) -> datetime | None:
+    """The text half of `_as_datetime`. Cached, because column typing reads every value of every text column more than once and most values
+    repeat; and a string with no digit in it cannot be a date in any of these formats, so those are not even tried.
+    """
+    if not any(character.isdigit() for character in text):
+        return None
+
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed.tzinfo else parsed
@@ -1966,6 +2077,165 @@ def _correlation_ratio(groups: dict[Any, list[float]]) -> float | None:
         len(group) * (statistics.fmean(group) - middle) ** 2 for group in groups.values() if group
     )
     return math.sqrt(min(between / total, 1.0))
+
+
+def _auc(values: Sequence[float], labels: Sequence[float]) -> float | None:
+    """ROC AUC from rank sums (ties handled exactly): how well ordering rows by `values` puts the 1s above the 0s."""
+    positives = [index for index, label in enumerate(labels) if label == 1.0]
+    negatives = len(labels) - len(positives)
+    if not positives or not negatives:
+        return None
+    ranks = _ranks(values)
+    return (
+        sum(ranks[index] for index in positives) - len(positives) * (len(positives) - 1) / 2
+    ) / (len(positives) * negatives)
+
+
+def _leakage_suspects(
+    data: Dataset, target: str, numbers: Sequence[float | None], kind: str
+) -> list[dict[str, Any]]:
+    """The columns that, alone, rank the target (almost) perfectly. Ids, dates and free text are left out, as in `_associations`."""
+    kinds = column_kinds(data)
+    roles = column_roles(data, target=target)
+    ignored = {*roles["id_columns"], *roles["date_columns"], *roles["text_columns"]}
+    found: list[dict[str, Any]] = []
+
+    for column in data.columns:
+        if column == target or kinds[column] in ("empty", "constant"):
+            continue
+        # Present only when the outcome happened (a readmission date, a ticket id, a cancel reason):
+        # its being there is the answer.
+        if kind == "binary" and numbers:
+            held = [
+                (not _is_missing(row.get(column)), number)
+                for row, number in zip(data.rows, numbers)
+                if number is not None
+            ]
+            share = sum(1 for there, _ in held if there) / len(held) if held else 0
+            if 0.01 <= share <= 0.99:
+                area = _auc([float(there) for there, _ in held], [number for _, number in held])
+                if area is not None and max(area, 1 - area) >= LEAKAGE_AUC:
+                    found.append(
+                        {
+                            "column": column,
+                            "measure": "ROC AUC of being filled in",
+                            "value": _rounded(max(area, 1 - area)),
+                        }
+                    )
+                    continue
+        if column in ignored:
+            continue
+        rows = [
+            (row.get(column), number)
+            for row, number in zip(data.rows, numbers)
+            if number is not None and not _is_missing(row.get(column))
+        ]
+        if len(rows) < 50:
+            continue
+
+        # A flag that is almost always on for a positive and almost never for anyone else is a rule,
+        # not a feature.
+        if kind == "binary" and len({_hashable(value) for value, _ in rows}) == 2:
+            base = sum(number for _, number in rows) / len(rows)
+            for level in {_hashable(value) for value, _ in rows}:
+                inside = [number for value, number in rows if _hashable(value) == level]
+                precision = sum(inside) / len(inside)
+                if (
+                    len(inside) >= FLAG_SUPPORT * len(rows)
+                    and precision >= FLAG_PRECISION
+                    and base
+                    and precision >= 5 * base
+                ):
+                    found.append(
+                        {
+                            "column": column,
+                            "measure": f"share of positives where it is {_plain(level)!r}",
+                            "value": _rounded(precision),
+                        }
+                    )
+                    break
+            if found and found[-1]["column"] == column:
+                continue
+
+        numeric = kinds[column] == "numeric" or (
+            kinds[column] == "boolean" and all(_as_number(value) is not None for value, _ in rows)
+        )
+        if numeric:
+            xs, ys = [_as_number(value) for value, _ in rows], [number for _, number in rows]
+            pairs = [(x, y) for x, y in zip(xs, ys) if x is not None]
+            if kind == "binary":
+                area = _auc([x for x, _ in pairs], [y for _, y in pairs])
+                strength, measure = (None if area is None else max(area, 1 - area)), "ROC AUC"
+                bar = LEAKAGE_AUC
+            else:
+                coefficient = _correlation([x for x, _ in pairs], [y for _, y in pairs], "spearman")
+                strength, measure = (
+                    None if coefficient is None else abs(coefficient)
+                ), "rank correlation"
+                bar = LEAKAGE_RANK
+        elif kind == "binary" and kinds[column] in ("categorical", "boolean"):
+            levels = _counts([value for value, _ in rows])
+            if (
+                not 2 <= len(levels) <= CATEGORY_LEVELS
+                or len(rows) / len(levels) < CATEGORY_ROWS_PER_LEVEL
+            ):
+                continue
+            totals: dict[Any, list[float]] = {}
+            for value, number in rows:
+                totals.setdefault(_hashable(value), []).append(number)
+            rate = {level: sum(group) / len(group) for level, group in totals.items()}
+            area = _auc(
+                [rate[_hashable(value)] for value, _ in rows], [number for _, number in rows]
+            )
+            strength, measure, bar = (
+                (None if area is None else max(area, 1 - area)),
+                "ROC AUC of the target's rate per level",
+                LEAKAGE_AUC,
+            )
+        else:
+            continue
+
+        if strength is not None and strength >= bar:
+            found.append({"column": column, "measure": measure, "value": _rounded(strength)})
+
+    return sorted(found, key=lambda item: -item["value"])
+
+
+def _purity_suspects(data: Dataset, target: str) -> list[dict[str, Any]]:
+    """For a target of several classes: the categorical columns that are a regrouping of it — within each class, nearly every row holds the same level."""
+    kinds = column_kinds(data)
+    roles = column_roles(data, target=target)
+    ignored = {*roles["id_columns"], *roles["date_columns"], *roles["text_columns"]}
+    found: list[dict[str, Any]] = []
+    for column in data.columns:
+        if column == target or column in ignored or kinds[column] not in ("categorical", "boolean"):
+            continue
+        rows = [
+            (row.get(column), row.get(target))
+            for row in data.rows
+            if not _is_missing(row.get(column)) and not _is_missing(row.get(target))
+        ]
+        levels = _counts([_hashable(value) for value, _ in rows])
+        if (
+            len(rows) < 50
+            or not 2 <= len(levels) <= CATEGORY_LEVELS
+            or max(levels.values()) / len(rows) > 0.9
+        ):
+            continue
+        by_class: dict[Any, dict[Any, int]] = {}
+        for value, label in rows:
+            counts = by_class.setdefault(_hashable(label), {})
+            counts[_hashable(value)] = counts.get(_hashable(value), 0) + 1
+        purity = sum(max(counts.values()) for counts in by_class.values()) / len(rows)
+        if purity >= PURITY:
+            found.append(
+                {
+                    "column": column,
+                    "measure": "share of rows holding the commonest level of its class",
+                    "value": _rounded(purity),
+                }
+            )
+    return found
 
 
 def _positive_class(present: Sequence[Any]) -> Any:
