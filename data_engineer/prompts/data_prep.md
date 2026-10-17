@@ -61,12 +61,22 @@ What it can run, in the order worth running them:
 
 - **Naming and types** — `normalize_columns` (consistent column names), `strip_whitespace` (leading
   and trailing whitespace off string values), `coerce_types` (values cast to the type they represent,
-  inferred where no schema says otherwise).
+  inferred where no schema says otherwise — including a number written with a sign, thousands
+  separators or a unit: `$1,250`, `1850 sqft`, `12.5%`).
+- **Placeholders and split columns** — `replace_sentinels` (a number that stands for "unknown" — `-999`,
+  `99`, `9999`, or a `0` coordinate — becomes a hole, so that the missing-value stage can flag it
+  before it fills it; found by itself, or `values` / `columns` when you know them) and
+  `merge_complementary` (two columns filled on different rows, one renamed half-way through the data,
+  become one), and `ordinal_scales` (answers written in an ordered scale — "Strongly disagree" to
+  "Strongly agree", "poor" to "excellent" — become ranks, so that "more" is something a model can see).
 - **Rows** — `drop_duplicates` (rows that repeat verbatim, or on a `subset` of columns),
   `drop_missing_rows` (rows missing a value in columns that must have one).
 - **Missing values** — `fill_missing` (a strategy per column: median, mean, mode, a constant, or
   `"auto"`, which picks per column from its type), `drop_missing_columns` (a column missing past
-  `max_missing_rate` of its rows, dropped rather than filled).
+  `max_missing_rate` of its rows, dropped rather than filled). **Leave the holes in unless the request
+  says otherwise**: `missing_value_agent` comes next and writes an `is_missing` flag for every hole
+  before it fills it, and a hole you fill here is a hole it can no longer flag — often the better
+  feature of the two.
 - **Shape** — `drop_constant_columns` (a column with one distinct value, which carries no signal),
   `drop_columns` (specific columns by name — `columns` — regardless of what they contain: an id, a
   column the request put out of scope, one a leakage check already flagged. `drop_missing_columns` and

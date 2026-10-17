@@ -31,6 +31,9 @@ class ToolCallRecord:
     module: str
     function: str
     arguments: dict[str, Any] = field(default_factory=dict)
+    # What the call returned, kept for the run record (`run.json`) and never rendered into a script.
+    # The tools answer with plain JSON-safe dicts; a large one is cut by the caller, not here.
+    result: Any = None
 
 
 class CodeTracker:
@@ -38,12 +41,31 @@ class CodeTracker:
 
     def __init__(self) -> None:
         self.calls: list[ToolCallRecord] = []
+        # Calls that raised or answered `status: error`: never rendered into a script, kept for the
+        # run record.
+        self.failures: list[dict[str, Any]] = []
 
-    def record(self, stage: str, agent: str, tool: Any, arguments: dict[str, Any]) -> None:
+    def record_failure(
+        self, stage: str, agent: str, tool: str, arguments: dict[str, Any], message: str
+    ) -> None:
+        """Note a call that did not work, so a run record can say how many were tried against how many ran."""
+        self.failures.append(
+            {
+                "stage": stage,
+                "agent": agent,
+                "tool": tool,
+                "arguments": dict(arguments),
+                "message": message,
+            }
+        )
+
+    def record(
+        self, stage: str, agent: str, tool: Any, arguments: dict[str, Any], result: Any = None
+    ) -> None:
         """Record one successful call. `tool` is a `builder.tools.Tool`; its `.function` is the real
         callable `arguments` ran against, which is where the import path comes from — `tool.caller` is
         only a string, and in its module form (see `Tool.resolve_function`) does not name the function
-        at all.
+        at all. `result` is what it returned, for the run record only.
         """
         function = tool.function
         if function is None:  # a tool with no resolved function cannot have actually run
@@ -57,6 +79,7 @@ class CodeTracker:
                 module=function.__module__,
                 function=function.__name__,
                 arguments=dict(arguments),
+                result=result,
             )
         )
 

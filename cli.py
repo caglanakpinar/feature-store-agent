@@ -13,6 +13,8 @@ this project's own use, since nothing here calls the vendored `agentic-ai` comma
 that command stops resolving to what `agent-builder` shipped.
 """
 
+from pathlib import Path
+
 import click
 
 from console.run import chat
@@ -24,9 +26,48 @@ def cli() -> None:
 
 
 @cli.command("generate")
-def generate() -> None:
+@click.option(
+    "--message",
+    default=None,
+    help="Send this as the first thing the user says, instead of typing it.",
+)
+@click.option(
+    "--yes",
+    "assume_yes",
+    is_flag=True,
+    help="Run unattended: approve every agent, answer any question an agent asks from what is already known, and never wait for input. Exit 1 if the pipeline did not finish.",
+)
+@click.option(
+    "--run-dir",
+    default=None,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Write run.json (what every agent and tool call did) and main.py here instead of scripts/main.py.",
+)
+@click.option(
+    "--no-playbook",
+    is_flag=True,
+    help="Do not run an agent's default tool calls when its model made none that ran: see what the model does on its own.",
+)
+@click.option(
+    "--tool-turns",
+    type=click.Choice(["auto", "on", "off"]),
+    default="auto",
+    show_default=True,
+    help="Give a model a short tool turn (one sentence, each stage's tools in short form) instead of each agent's own prompt. auto: for a small local model.",
+)
+def generate(
+    message: str | None, assume_yes: bool, run_dir: Path | None, no_playbook: bool, tool_turns: str
+) -> None:
     """Start an interactive session: chat, then run the pipeline once its requirements are met."""
-    chat()
+    finished = chat(
+        message=message,
+        auto=assume_yes,
+        run_dir=run_dir,
+        use_playbook=not no_playbook,
+        tool_turns=tool_turns,
+    )
+    if assume_yes and not finished:
+        raise SystemExit(1)
 
 
 @cli.command("configure")

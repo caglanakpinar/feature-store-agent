@@ -39,8 +39,10 @@ import asyncio
 import importlib
 import json
 import re
+import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import click
 
@@ -49,6 +51,8 @@ import click
 from models.llms import ToolFailure, as_tool_content
 
 from console.agentic import ChatAgent, CodeGeneratorAgent, RequirementAgent, save_question
+from console import gate as gate_rules
+from console import playbook, tool_turn
 from console.code_tracker import CodeTracker
 from data_engineer.agents.workers import (
     DataAnalyzer,
@@ -103,8 +107,39 @@ NOT_APPROVED_PROMPT = Path(__file__).resolve().parent / "prompts" / "not_approve
 DECIDER_SLOT = "rag_data_engineer_decider_agent"
 
 
+# Set by `chat(auto=True)` (`cli.py generate --yes`): every approval is granted and nothing waits on
+# the keyboard, so the whole console can be driven unattended — by `benchmarks/run.py chat`, for
+# one.
+AUTO = False
+# Unattended, an agent that keeps asking a question nobody can answer would otherwise stall the run
+# (a person would eventually give up): it is answered from what the run already knows this many
+# times, and its last reply is taken as it stands after that.
+AUTO_MAX_ESCALATIONS = 2
+# A turn of a small model that does not stop would otherwise run to the configured `max_tokens`
+# (16,000 for these agents: minutes, per turn, per agent). Each model turn is cut at this many
+# tokens, and a tool loop at this many rounds; a large model's own, smaller `max_tokens` wins.
+MODEL_TURN_TOKENS = 500
+MODEL_ROUNDS = 2
+# An agent whose model made no tool call that ran is given its playbook (`console/playbook.py`).
+# `cli.py generate --no-playbook` turns that off, to see what the model does on its own.
+PLAYBOOK = True
+# After this many agents in a row whose model made no tool call that ran, the console stops giving
+# the model a turn and goes straight to the playbook: a model that has not called a tool in two
+# tries is not about to (the 0.5B model made none in any of its turns, minutes each).
+# `--no-playbook` never skips, so what the model does on its own is still measured in full.
+MODEL_PATIENCE = 2
+# How a model gets its turn at a tool-bearing agent: `auto` gives a small model run in this process a short *tool turn* (`console/tool_turn.py`)
+# instead of the agent's own multi-thousand-token prompt, `on` and `off` force it either way. `cli.py generate --tool-turns`.
+TOOL_TURNS = "auto"
+# Where an unattended run leaves `run.json` and `main.py` (`cli.py generate --run-dir`); None keeps
+# the interactive behaviour — `scripts/main.py` only.
+RUN_DIR: Path | None = None
+
+
 def ask(prompt: str) -> str | None:
-    """Read one line from the user, or None when they end the session with Ctrl-C/Ctrl-D."""
+    """Read one line from the user, or None when they end the session with Ctrl-C/Ctrl-D (or when running unattended)."""
+    if AUTO:
+        return None
     try:
         return input(prompt)
     except (EOFError, KeyboardInterrupt):
@@ -359,10 +394,23 @@ def run_with_prompted_tools(
 
         try:
             result = agent.toolbox.call(name, arguments)
+            # The tools catch their own errors and answer `{"status": "error", "message": ...}`
+            # rather than raising, so a call that failed that way is not a call worth reproducing
+            # either.
+            failed = isinstance(result, dict) and result.get("status") == "error"
             if tool is not None and tracker is not None:
-                tracker.record(stage, agent_name, tool, arguments)
+                if failed:
+                    tracker.record_failure(
+                        stage, agent_name, name, arguments, str(result.get("message", ""))
+                    )
+                else:
+                    tracker.record(stage, agent_name, tool, arguments, result)
             rendered = as_tool_content(result)
         except Exception as error:
+            if tracker is not None:
+                tracker.record_failure(
+                    stage, agent_name, name, arguments, f"{type(error).__name__}: {error}"
+                )
             rendered = as_tool_content(ToolFailure(f"{type(error).__name__}: {error}"))
 
         conversation += (
@@ -372,6 +420,62 @@ def run_with_prompted_tools(
         )
 
     return text
+
+
+def capped(agent: Any, tokens: int = MODEL_TURN_TOKENS) -> dict[str, int]:
+    """`max_tokens` for one model call: `tokens`, unless the agent's own configured ceiling is lower."""
+    configured = int(getattr(getattr(agent, "llm", None), "max_tokens", 0) or tokens)
+    return {"max_tokens": min(configured, tokens)}
+
+
+@contextmanager
+def recorded_calls(
+    agent: Any, tracker: CodeTracker | None, stage: str, agent_name: str, data_path: str
+) -> Iterator[None]:
+    """Every tool the agent runs while this is open — whoever asked for it — is recorded, with the data path filled in when it was left out.
+
+    `run_with_prompted_tools` does this itself for a provider with no tool-calling of its own. A
+    provider that has it (this project's local model, Claude, OpenAI...) runs the loop inside
+    `agent-builder`, which has no hook for `CodeTracker`, so the toolbox's `call` is wrapped for the
+    duration instead: the model's calls, and the playbook's, reach `scripts/main.py` and `run.json`
+    the same way.
+    """
+    if tracker is None or not agent.toolbox:
+        yield
+        return
+
+    original = agent.toolbox.call
+    # a toolbox with its own instance-level `call` gets exactly that back, not nothing
+    shadowed = "call" in vars(agent.toolbox)
+
+    def call(name: str, arguments: dict[str, Any] | None = None) -> Any:
+        tool = agent.toolbox.agent_tools.get(name)
+        used = (
+            with_known_data_path(tool, dict(arguments or {}), data_path)
+            if tool is not None
+            else dict(arguments or {})
+        )
+        try:
+            result = original(name, used)
+        except Exception as error:
+            tracker.record_failure(
+                stage, agent_name, name, used, f"{type(error).__name__}: {error}"
+            )
+            raise
+        if isinstance(result, dict) and result.get("status") == "error":
+            tracker.record_failure(stage, agent_name, name, used, str(result.get("message", "")))
+        elif tool is not None:
+            tracker.record(stage, agent_name, tool, used, result)
+        return result
+
+    agent.toolbox.call = call
+    try:
+        yield
+    finally:
+        if shadowed:
+            agent.toolbox.call = original
+        else:
+            del agent.toolbox.call
 
 
 def run_agent(
@@ -416,14 +520,133 @@ def run_agent(
             agent, full_prompt, data_path, tracker=tracker, stage=stage, agent_name=handle.NAME
         )
 
-    if not prefix:
-        return agent.run(question, context, agent_outputs)
+    limits = {**capped(agent), **({"max_rounds": MODEL_ROUNDS} if agent.toolbox else {})}
+    with recorded_calls(agent, tracker, stage, handle.NAME, data_path):
+        if not prefix:
+            return agent.run(question, context, agent_outputs, **limits)
 
-    return agent.generate(full_prompt)
+        return agent.generate(full_prompt, **limits)
+
+
+def where_the_table_is(
+    played: bool, model_calls: int, text: str, current_path: str, play_state: "playbook.State"
+) -> str:
+    """The data path the next agent should work from, once an agent's output is approved.
+
+    Whoever did the work says where it left the table. When the playbook ran, that is its own state
+    — never a path-looking word in some model's prose, which can be the original `data.csv` quoted
+    back and would send every later stage to the raw file. When the model ran tools, it is the last
+    path its text names, as before, if that file exists (and the playbook follows it); one that does
+    not exist is ignored. An agent that ran nothing (a model's framing text) leaves the table where
+    it was.
+    """
+    if played:
+        return play_state.path
+    if model_calls:
+        named = extract_path(text, current_path)
+        if Path(named).is_file():
+            play_state.path = named
+            return named
+        # a connection string is not a file, and is where a database source stays
+        if "://" in named:
+            return named
+    return current_path
+
+
+def small_model_turn(
+    handle: Any, play_state: "playbook.State", tracker: CodeTracker, stage: str
+) -> tuple[str, dict[str, Any]]:
+    """A small model's turn at a tool-bearing agent: one sentence, the stage's tools in short form, whatever it calls (`console/tool_turn.py`).
+
+    With the playbook on, the stage runs its own calls afterwards -- their arguments come from what the earlier stages found -- and what the
+    model chose is counted: `resolved` proposals named a real tool of the stage, `arguments_ok` of them needed nothing taken back. With the
+    playbook off the model's calls are run as its own, after `repair_arguments` has fixed the path and dropped what the tool does not take,
+    and what they returned is the agent's output.
+    """
+    agent = handle.build()
+    proposals, text, prompt = tool_turn.propose(
+        agent, play_state.path, play_state.target, MODEL_TURN_TOKENS, play_state.columns or None
+    )
+    named = [p for p in proposals if p.tool]
+    record = {
+        "prompt": prompt,
+        "proposals": tool_turn.record(proposals),
+        "resolved": len(named),
+        "unresolved": len(proposals) - len(named),
+        "arguments_ok": sum(p.usable for p in proposals),
+    }
+    if PLAYBOOK:
+        return "", record
+
+    outputs = []
+    with recorded_calls(agent, tracker, stage, handle.NAME, play_state.path):
+        for proposal in named:
+            tool = agent.toolbox.agent_tools[proposal.tool]
+            arguments = tool_turn.repair_arguments(
+                proposal.tool, tool, proposal.arguments, play_state.path, play_state.target, play_state.columns or None
+            )
+            try:
+                result = agent.toolbox.call(proposal.tool, arguments)
+            except Exception as error:  # a model's own call that raises is its output, not the end of the run
+                outputs.append(f"{proposal.tool} raised {type(error).__name__}: {error}")
+                continue
+            playbook.learn(play_state, proposal.tool, result)
+            outputs.append(tool_turn.summarize(proposal.tool, result, play_state.path))
+    return "\n\n".join(outputs) or text, record
+
+
+def backstop(
+    handle: Any,
+    output: str,
+    play_state: "playbook.State",
+    tracker: CodeTracker,
+    calls_before: int,
+    stage: str,
+) -> str:
+    """Give an agent its playbook when its own turn did not do the work, and return the text that stands as its output.
+
+    A tool-bearing agent has done the work when at least one of its calls ran and answered; a
+    thinking agent (no tools) when its text names the target the playbook found. Otherwise the
+    model's text is a claim about work that did not happen, and the playbook's own text — built from
+    what its calls returned — replaces it.
+    """
+    if not PLAYBOOK or handle.NAME not in playbook.PLAYBOOKS:
+        return output
+
+    agent = handle.build()
+    if agent.toolbox:
+        if len(tracker.calls) > calls_before:
+            return output
+    elif play_state.target and play_state.target in output and len(output.strip()) > 40:
+        return output
+
+    click.secho(
+        f"  (console: {handle.NAME} made no tool call that ran, so its default calls run instead)",
+        fg="yellow",
+    )
+    with recorded_calls(agent, tracker, stage, handle.NAME, play_state.path):
+        call = (
+            (lambda name, arguments: agent.toolbox.call(name, arguments))
+            if agent.toolbox
+            else (lambda name, arguments: {})
+        )
+        try:
+            return playbook.PLAYBOOKS[handle.NAME](play_state, call)
+        # a playbook that falls over must not end an unattended run: say so, keep the model's text
+        except Exception as error:
+            click.secho(
+                f"  (the default calls for {handle.NAME} failed: {type(error).__name__}: {error})",
+                fg="red",
+            )
+            return output
 
 
 def approve(name: str) -> bool | None:
     """Ask the human to approve what an agent just produced. None when they end the session."""
+    if AUTO:
+        click.secho(f"\nApprove {name}? [y/n]: y (--yes)", fg="yellow")
+        return True
+
     while True:
 
         answer = ask(f"\nApprove {name}? [y/n]: ")
@@ -449,7 +672,9 @@ def write_script(content: str, path: Path = SCRIPTS_DIR / "main.py") -> Path:
     return path
 
 
-def generate_code(question: str, agent_outputs: dict[str, str], tracker: CodeTracker) -> None:
+def generate_code(
+    question: str, agent_outputs: dict[str, str], tracker: CodeTracker, use_model: bool = True
+) -> None:
     """Turn everything `tracker` recorded into `scripts/main.py`, once every stage is approved.
 
     `code_generator_agent` is asked to write the script itself — see `prompts/code_generator.md` — so
@@ -469,9 +694,17 @@ def generate_code(question: str, agent_outputs: dict[str, str], tracker: CodeTra
         return
 
     script = tracker.render_script()
+    if not use_model:  # a small model's script has never covered the recorded calls; the recorded one is written as it is
+        path = write_script(script, RUN_DIR / "main.py" if RUN_DIR else SCRIPTS_DIR / "main.py")
+        click.secho(f"\nWrote {path} — {len(tracker.calls)} step(s).", fg="green", bold=True)
+        return
+
     try:
         reply = CodeGeneratorAgent.run(
-            question=question, context=tracker.render_calls(), agent_outputs=agent_outputs
+            question=question,
+            context=tracker.render_calls(),
+            agent_outputs=agent_outputs,
+            **capped(CodeGeneratorAgent.build(), 2500),
         )
         parsed = as_json(reply)
         candidate = str(parsed["script"]) if parsed and parsed.get("script") else ""
@@ -485,8 +718,59 @@ def generate_code(question: str, agent_outputs: dict[str, str], tracker: CodeTra
     except Exception as error:
         click.secho(f"  (code generation unavailable: {error})", fg="yellow")
 
-    path = write_script(script)
+    path = write_script(script, RUN_DIR / "main.py" if RUN_DIR else SCRIPTS_DIR / "main.py")
     click.secho(f"\nWrote {path} — {len(tracker.calls)} step(s).", fg="green", bold=True)
+
+
+def auto_answer(agent_name: str, problem: str, data_path: str) -> str:
+    """What an unattended run says to an agent that stopped to ask: there is nobody to ask, so it is told
+    what the run already knows and to carry on with a stated assumption instead of asking again."""
+    return (
+        f"No one is available to answer questions. Work from what is already on the record: the problem is "
+        f"'{problem}' and the data is at {data_path}. Where something is not stated, pick the most "
+        "reasonable default, say in your answer that it is an assumption, and do not ask again."
+    )
+
+
+def save_record(
+    agent_outputs: dict[str, str],
+    log: list[dict[str, Any]],
+    tracker: CodeTracker,
+    verdict: dict[str, Any],
+    finished: bool,
+    started: float,
+) -> None:
+    """Write `run.json` into `RUN_DIR`: what an unattended run did, for `benchmarks/score.py` to read.
+
+    Only when `RUN_DIR` is set. Every tool call that ran carries its arguments and what it returned,
+    so a score can read what the run actually found rather than what an agent said it found.
+    """
+    if RUN_DIR is None:
+        return
+
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    record = {
+        "finished": finished,
+        "seconds": round(time.time() - started, 1),
+        "problem": verdict.get("problem", ""),
+        "data_details": verdict.get("data_details", ""),
+        "agents": log,
+        "agent_outputs": agent_outputs,
+        "calls": [
+            {
+                "stage": call.stage,
+                "agent": call.agent,
+                "tool": call.tool,
+                "function": f"{call.module}.{call.function}",
+                "arguments": call.arguments,
+                "result": call.result,
+            }
+            for call in tracker.calls
+        ],
+        "failed_calls": tracker.failures,
+    }
+    (RUN_DIR / "run.json").write_text(json.dumps(record, indent=1, default=str))
+    click.echo(f"Saved run record {RUN_DIR / 'run.json'}.")
 
 
 def run_pipeline(question: str, context: str, verdict: dict[str, Any]) -> bool:
@@ -495,6 +779,9 @@ def run_pipeline(question: str, context: str, verdict: dict[str, Any]) -> bool:
     Returns True when the whole pipeline was approved through to the end, False when the user ended the
     session partway. On a full approval, `generate_code` also writes `scripts/main.py` from everything
     `tracker` recorded — see that function's own docstring.
+
+    Unattended (`AUTO`), every output is approved and an agent that escalates is answered from what
+    the run already knows — see `auto_answer`.
     """
     agent_outputs: dict[str, str] = {
         DECIDER_SLOT: (
@@ -508,70 +795,198 @@ def run_pipeline(question: str, context: str, verdict: dict[str, Any]) -> bool:
     # `extract_path`'s own docstring for why relying on prose alone was not holding up in practice.
     current_path = str(verdict.get("data_details", ""))
     tracker = CodeTracker()
+    log: list[dict[str, Any]] = []
+    started = time.time()
+    play_state = playbook.State(problem=problem, source=current_path)
+    idle_turns = 0  # consecutive tool-bearing agents whose model made no call that ran
+    small_model_run = False
 
-    for stage, package, handles in STAGES:
-        click.secho(f"\n=== {stage} ===", fg="cyan", bold=True)
+    def finish(finished: bool) -> bool:
+        save_record(agent_outputs, log, tracker, verdict, finished, started)
+        return finished
 
-        for handle in handles:
-            prefix = ""
-            while True:
-                click.secho(f"\n[{handle.NAME}] working...", fg="yellow")
-                agent_context = f"{context}\n\nCurrent data path: {current_path}"
-                try:
-                    output = run_agent(
-                        handle, question, agent_context, agent_outputs, prefix, current_path,
-                        tracker=tracker, stage=stage,
+    try:
+        for stage, package, handles in STAGES:
+            click.secho(f"\n=== {stage} ===", fg="cyan", bold=True)
+
+            for handle in handles:
+                prefix = ""
+                escalations = 0
+                while True:
+                    click.secho(f"\n[{handle.NAME}] working...", fg="yellow")
+                    agent_context = f"{context}\n\nCurrent data path: {current_path}"
+                    calls_before, failures_before = len(tracker.calls), len(tracker.failures)
+                    began = time.time()
+                    agent = handle.build()
+                    compact = tool_turn.uses_tool_turn(agent, TOOL_TURNS)
+                    # A small model has nothing to add to a framing that reads the problem back (and wrote one that invented its target in
+                    # most runs); the playbook's is built from what the tools found.
+                    framing = PLAYBOOK and not agent.toolbox and tool_turn.is_local_model(agent, TOOL_TURNS)
+                    skipped = framing or (
+                        PLAYBOOK
+                        and idle_turns >= MODEL_PATIENCE
+                        and handle.NAME in playbook.PLAYBOOKS
+                        and agent.toolbox
                     )
-                except ValueError as error:
-                    click.secho(f"{handle.NAME} could not run: {error}", fg="red")
-                    return False
+                    turn: dict[str, Any] = {}
+                    try:
+                        if skipped:
+                            if not framing:
+                                click.secho(
+                                    f"  (console: the model made no tool call in its last {idle_turns} turns, so {handle.NAME} goes straight to its default calls)",
+                                    fg="yellow",
+                                )
+                            output = ""
+                        elif compact:
+                            output, turn = small_model_turn(handle, play_state, tracker, stage)
+                            click.secho(
+                                f"  (tool turn: the model called {[p['tool'] for p in turn['proposals']] or 'nothing'})",
+                                fg="yellow",
+                            )
+                        else:
+                            output = run_agent(
+                                handle,
+                                question,
+                                agent_context,
+                                agent_outputs,
+                                prefix,
+                                current_path,
+                                tracker=tracker,
+                                stage=stage,
+                            )
+                    except ValueError as error:
+                        click.secho(f"{handle.NAME} could not run: {error}", fg="red")
+                        return finish(False)
 
-                envelope = escalation_envelope(output)
-                escalated, text = envelope if envelope else (False, output)
+                    model_calls, model_failures = (
+                        len(tracker.calls) - calls_before,
+                        len(tracker.failures) - failures_before,
+                    )
+                    if turn and PLAYBOOK:  # the model's choice counts as its call; the stage's own calls come next
+                        model_calls, model_failures = turn["resolved"], turn["unresolved"]
+                    if agent.toolbox and not skipped:
+                        idle_turns = 0 if model_calls else idle_turns + 1
+                    small_model_run = small_model_run or bool(turn) or framing
+                    model_output = output
+                    output = backstop(handle, output, play_state, tracker, calls_before, stage)
+                    envelope = escalation_envelope(output)
+                    escalated, text = envelope if envelope else (False, output)
 
-                click.secho(f"\n[{handle.NAME}]", fg="green", bold=True)
-                click.echo(text)
+                    click.secho(f"\n[{handle.NAME}]", fg="green", bold=True)
+                    click.echo(text)
+                    click.echo(
+                        f"[console] {handle.NAME}: {len(tracker.calls) - calls_before} tool call(s) ran "
+                        f"in {time.time() - began:.0f}s"
+                    )
+                    log.append(
+                        {
+                            "agent": handle.NAME,
+                            "stage": stage,
+                            "escalated": escalated,
+                            "tool_calls": len(tracker.calls) - calls_before,
+                            "model_calls": model_calls,
+                            "model_failed_calls": model_failures,
+                            "model_skipped": bool(skipped),
+                            "tool_turn": turn or None,
+                            "playbook": output is not model_output,
+                            "model_output": model_output[:1200],
+                            "seconds": round(time.time() - began, 1),
+                            "output": text,
+                        }
+                    )
 
-                if escalated:
-                    # Blocked on the human, not on quality — go back to the prompt for an answer
-                    # instead of asking for y/n, and retry with nothing else changed.
-                    answer = ask(f"\n{handle.NAME} is blocked — your answer: ")
-                    if answer is None:
+                    if escalated:
+                        if AUTO:
+                            escalations += 1
+                            if escalations > AUTO_MAX_ESCALATIONS:
+                                click.secho(
+                                    f"  ({handle.NAME} kept asking; taking its last reply as it stands)",
+                                    fg="yellow",
+                                )
+                                agent_outputs[handle.NAME] = text
+                                break
+                            answer = auto_answer(handle.NAME, problem, current_path)
+                            click.secho(
+                                f"\n{handle.NAME} is blocked — answered unattended.", fg="yellow"
+                            )
+                        else:
+                            # Blocked on the human, not on quality — go back to the prompt for an
+                            # answer instead of asking for y/n, and retry with nothing else changed.
+                            answer = ask(f"\n{handle.NAME} is blocked — your answer: ")
+                            if answer is None:
+                                click.secho("\nEnding the run here.", fg="yellow")
+                                return finish(False)
+
+                        context = f"{context}\n\n{handle.NAME} asked:\n{text}\n\nAnswer: {answer}"
+                        current_path = extract_path(answer, current_path)
+                        continue
+
+                    verdict_given = approve(handle.NAME)
+                    if verdict_given is None:
                         click.secho("\nEnding the run here.", fg="yellow")
-                        return False
+                        return finish(False)
 
-                    context = f"{context}\n\n{handle.NAME} asked:\n{text}\n\nAnswer: {answer}"
-                    current_path = extract_path(answer, current_path)
-                    continue
+                    if verdict_given:
+                        agent_outputs[handle.NAME] = text
+                        current_path = where_the_table_is(
+                            output is not model_output, model_calls, text, current_path, play_state
+                        )
+                        break
 
-                verdict_given = approve(handle.NAME)
-                if verdict_given is None:
-                    click.secho("\nEnding the run here.", fg="yellow")
-                    return False
+                    # Its next turn goes deeper than exactly this attempt, with a search on its own
+                    # topic.
+                    click.secho(
+                        f"Not approved — {handle.NAME} will search and go deeper.", fg="yellow"
+                    )
+                    prefix = rejection_prefix(handle, package, problem, text)
 
-                if verdict_given:
-                    agent_outputs[handle.NAME] = text
-                    current_path = extract_path(text, current_path)
-                    break
-
-                # Its next turn goes deeper than exactly this attempt, with a search on its own topic.
-                click.secho(f"Not approved — {handle.NAME} will search and go deeper.", fg="yellow")
-                prefix = rejection_prefix(handle, package, problem, text)
+    # an unexpected error ends the run, but not before what it did so far is on the record
+    except Exception:
+        finish(False)
+        raise
 
     click.secho("\nEvery stage approved. The run is complete.", fg="green", bold=True)
-    generate_code(question, agent_outputs, tracker)
-    return True
+    generate_code(question, agent_outputs, tracker, use_model=not small_model_run)
+    return finish(True)
 
 
-def chat() -> None:
-    """Talk to the user until the requirements gate passes, then run the pipeline."""
+def chat(
+    message: str | None = None,
+    auto: bool = False,
+    run_dir: Path | None = None,
+    use_playbook: bool = True,
+    tool_turns: str = "auto",
+) -> bool:
+    """Talk to the user until the requirements gate passes, then run the pipeline.
+
+    Args:
+        message: A first user turn to send instead of reading one — the problem as the user would type it.
+        auto: Run unattended: approve every stage and never wait on the keyboard. If the requirements
+            gate is not met by `message`, the session ends (there is nobody to answer the follow-up
+            question).
+        run_dir: Where an unattended run leaves `run.json` and `main.py`; `scripts/main.py` when None.
+        use_playbook: Give an agent whose model made no tool call that ran its default calls (`console/playbook.py`); False to see the model alone.
+        tool_turns: `auto` gives a small local model a short tool turn (`console/tool_turn.py`) instead of each agent's own prompt; `on`/`off` force it.
+
+    Returns whether the pipeline ran to the end.
+    """
+    global AUTO, RUN_DIR, PLAYBOOK, TOOL_TURNS
+    AUTO = auto
+    RUN_DIR = run_dir
+    PLAYBOOK = use_playbook
+    TOOL_TURNS = tool_turns
     click.echo("Hey, I am Feature Engineer Helper feature-store-agent. How can I help you?")
     transcript: list[str] = []
+    pending = message
 
     while True:
-        question = ask("You: ")
+        if pending is not None:
+            question, pending = pending, None
+            click.echo(f"You: {question}")
+        else:
+            question = ask("You: ")
         if question is None:
-            return
+            return False
 
         if not question.strip():
             continue
@@ -582,14 +997,32 @@ def chat() -> None:
         # Every new question is indexed into both packages' knowledge bases as it arrives, regardless
         # of whether `rag_data_engineer_decider_agent`/`problem_analyzer_agent` are in "rag" mode yet —
         # see `save_question`'s own docstring for why this is best-effort and never blocks the turn.
-        save_question("data_engineer", question)
-        save_question("feature_engineering", question)
+        # An unattended run does not write: benchmark questions are not the user's to remember.
+        if not auto:
+            save_question("data_engineer", question)
+            save_question("feature_engineering", question)
 
         try:
-            verdict = as_json(RequirementAgent.run(question=question, context=context))
+            verdict = as_json(
+                RequirementAgent.run(
+                    question=question, context=context, **capped(RequirementAgent.build(), 700)
+                )
+            )
         except ValueError as error:  # an unresolvable key or model — nothing to retry against
             click.secho(f"Feature-Store Agent: ({error})", fg="red")
-            return
+            return False
+
+        # A small model often answers this gate in prose, or names a source nobody mentioned. The
+        # two things it checks can be read off the conversation, so when the model's verdict is
+        # missing, unmet or names a different source than the conversation does, the rules' reading
+        # is taken instead (see `console.gate`).
+        ruled = gate_rules.read_request(context)
+        if ruled and not gate_rules.agrees(verdict, ruled):
+            click.secho(
+                "  (the rules read the request: a problem and a reachable data source are both there)",
+                fg="yellow",
+            )
+            verdict = ruled
 
         # A reply that would not parse is treated as "not yet": the chat agent asks for what is
         # missing, which is the same thing that happens on an honest `requirements: false`.
@@ -597,11 +1030,18 @@ def chat() -> None:
             click.secho("\nRequirements met — starting the pipeline.", fg="green", bold=True)
             click.echo(f"  problem       {verdict.get('problem', '')}")
             click.echo(f"  data details  {verdict.get('data_details', '')}")
-            run_pipeline(question, context, verdict)
-            return
+            return run_pipeline(question, context, verdict)
 
         gate = json.dumps(verdict) if verdict else "the requirements check did not return a verdict"
+        if auto:
+            click.secho(
+                f"Requirements not met by the message, and nobody is there to answer: {gate}",
+                fg="red",
+            )
+            return False
+
         reply = ChatAgent.run(
+            **capped(ChatAgent.build(), 700),
             question=question,
             context=f"{context}\n\nRequirements check: {gate}\n\n"
             "Requirements are not met yet. Ask the user for whatever is missing — the problem "

@@ -51,7 +51,8 @@ Quote it exactly; do not paraphrase or invent one.
 
 The steps themselves, by what they need from you:
 
-- **Told the columns** — `date_parts`, `cyclical_dates`, `recency`, `date_differences`,
+- **Told the columns** — `date_parts`, `cyclical_dates`, `recency`, `date_differences`, `geo_distance`
+  (kilometres between two latitude/longitude pairs, found by name),
   `group_aggregates`, `group_relative`, `lags`, `rolling_windows`, `cumulative`, `event_gaps`,
   `trend`, `math_transformations`, `scaling`, `binning`, `outliers`, `ratios`, `interactions`,
   `row_statistics`, `frequency_encoding`, `one_hot_encoding`, `ordinal_encoding`,

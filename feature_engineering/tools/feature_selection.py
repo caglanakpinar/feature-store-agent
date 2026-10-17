@@ -74,6 +74,8 @@ import importlib.util
 import inspect
 import logging
 import math
+import random
+import re
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -113,6 +115,22 @@ QUASI_CONSTANT_SHARE = 0.99  # one value in this share of the rows is constant i
 ID_LIKE_SHARE = 0.95  # distinct values per row above this is an identifier, not a feature
 MAX_CORRELATION = 0.95  # two features this alike carry one feature's worth of information
 LEAKAGE_SCORE = 0.98  # a score this high is usually the target wearing a different name
+# Normalised mutual information only reaches the bar above when a feature names the target almost
+# row for row. A column recorded after the outcome usually overlaps it a little (churners were last
+# seen 20-90 days ago, everyone else 0-25), so it is also measured the way a person would check it:
+# how well does this one column rank the classes, or the values, on its own? Strong real features
+# exist, but a single column past these is far more often the answer in disguise than a good feature
+# (benchmarks/RESULTS.md, c01).
+# a numeric feature that ranks a binary target this well, either way up, on its own
+LEAKAGE_AUC = 0.95
+# a numeric feature whose rank correlation with a numeric target is this strong, either way up
+LEAKAGE_RANK = 0.97
+# a category is scored by the rate of the target in each of its levels only up to this many
+# levels...
+CATEGORY_LEVELS = 30
+# ...and only when each level has this many rows to show a rate with (more levels than that fit a
+# rate to noise)
+CATEGORY_ROWS_PER_LEVEL = 20
 
 SMOOTHING = 0.5  # added to every cell of a contingency table, so an empty one is not a divide by zero
 
@@ -785,7 +803,12 @@ def screen_features(
             flags.append("quasi_constant")
         if present and missing_rate > max_missing_rate:
             flags.append("high_missing")
-        if present and distinct / len(present) >= id_like_share and distinct > 20:
+        if (
+            present
+            and distinct / len(present) >= id_like_share
+            and distinct > 20
+            and _is_identifier(column, kinds.get(column), present)
+        ):
             flags.append("id_like")
         if kinds.get(column) == "date":
             flags.append("date_column")
@@ -923,7 +946,7 @@ def leakage_suspects(
         kinds=column_kinds(sampled),
     )
     scores = _score_mutual_information(scoring)
-    return [
+    suspects = [
         {
             "feature": column,
             "explains": round(entry["score"], 4),
@@ -932,6 +955,103 @@ def leakage_suspects(
         for column, entry in scores.items()
         if entry.get("score") is not None and entry["score"] >= threshold
     ]
+
+    # The second opinion, on the same `leakage_score` switch: None turns off both.
+    flagged = {suspect["feature"] for suspect in suspects}
+    if scoring.task == "binary":
+        for column, entry in _score_auc(scoring).items():
+            area = entry.get("auc")
+            if area is not None and column not in flagged and max(area, 1 - area) >= LEAKAGE_AUC:
+                suspects.append(
+                    {
+                        "feature": column,
+                        "explains": round(max(area, 1 - area), 4),
+                        "measure": "single-feature ROC AUC",
+                    }
+                )
+        # A category is read through the rate of the target in each of its levels. That is an
+        # in-sample fit, so it is limited to few levels with many rows each; a status or a reason of
+        # two or three words is the case it is for.
+        target = scoring.target_numbers()
+        for column in scoring.features:
+            if column in flagged or scoring.kinds.get(column) not in (
+                "categorical",
+                "boolean",
+                "text",
+            ):
+                continue
+            labels = scoring.labels(column)
+            levels = Counter(labels)
+            if (
+                len(levels) < 2
+                or len(levels) > CATEGORY_LEVELS
+                or len(labels) / len(levels) < CATEGORY_ROWS_PER_LEVEL
+            ):
+                continue
+            positives = Counter(label for label, outcome in zip(labels, target) if outcome == 1.0)
+            rate = {label: positives[label] / count for label, count in levels.items()}
+            pairs = [
+                (rate[label], outcome)
+                for label, outcome in zip(labels, target)
+                if outcome is not None
+            ]
+            area = _auc([value for value, _ in pairs], [outcome for _, outcome in pairs])
+            if area is not None and max(area, 1 - area) >= LEAKAGE_AUC:
+                suspects.append(
+                    {
+                        "feature": column,
+                        "explains": round(max(area, 1 - area), 4),
+                        "measure": "ROC AUC of the target's rate in each level",
+                    }
+                )
+    elif scoring.task == "regression":
+        for column, entry in _score_spearman(scoring).items():
+            if (
+                entry.get("score") is not None
+                and column not in flagged
+                and entry["score"] >= LEAKAGE_RANK
+            ):
+                suspects.append(
+                    {
+                        "feature": column,
+                        "explains": round(entry["score"], 4),
+                        "measure": "rank correlation with the target",
+                    }
+                )
+    return suspects
+
+
+def noise_floor(
+    rows: Table,
+    target: str,
+    features: Sequence[str],
+    method: str | None = None,
+    task: str | None = None,
+    max_rows: int = MAX_ROWS,
+    options: dict[str, Any] | None = None,
+    quantile: float = 0.95,
+    seed: int = 0,
+) -> float:
+    """The score a feature earns by chance: the `quantile` of every feature's score against a shuffled copy of the target.
+
+    The target is permuted once, with a fixed seed, so the same table gives the same floor. A
+    feature scoring at or under it has shown no more relationship with the target than a random
+    column would.
+    """
+    values = [row.get(target) for row in rows]
+    random.Random(seed).shuffle(values)
+    shuffled = [{**row, target: value} for row, value in zip(rows, values)]
+    ranking, _ = rank_features(
+        shuffled,
+        target,
+        list(features),
+        method=method,
+        task=task,
+        max_rows=max_rows,
+        options=options,
+    )
+    scores = sorted(entry["score"] for entry in ranking if entry.get("score") is not None)
+    return scores[int(quantile * (len(scores) - 1))] if scores else 0.0
 
 
 def redundant_pairs(
@@ -999,6 +1119,7 @@ def select_features(
     leakage_score: float | None = LEAKAGE_SCORE,
     max_rows: int = MAX_ROWS,
     options: dict[str, Any] | None = None,
+    drop_noise: bool = False,
 ) -> dict[str, Any]:
     """Screen, rank, flag leakage, prune redundancy and cut — the four stages in one call.
 
@@ -1023,6 +1144,8 @@ def select_features(
             a feature you know to be available at prediction time.
         max_rows: Rows to score over.
         options: Extra arguments for the ranking method.
+        drop_noise: Also drop the features that do not score better than chance: every feature is scored a second time against a shuffled
+            copy of the target, and one that does not beat the 95th percentile of those scores is indistinguishable from noise.
 
     Returns:
         The selected columns, the full ranking, everything dropped and why, the leakage suspects and
@@ -1035,6 +1158,31 @@ def select_features(
         if column != target and column not in excluded
     ]
     dropped: list[dict[str, Any]] = []
+
+    # A feature built from the target itself is the answer in disguise — `units_sold_diff_1` is
+    # today's units minus yesterday's — except for its past values: `units_sold_lag_7` is what the
+    # series said a week ago, which is known when the prediction is made.
+    named_after_target: list[dict[str, Any]] = []
+    if leakage_score is not None:
+        from_target = re.compile(rf"(^|_){re.escape(target)}(_|$)")
+        past = re.compile(r"_lag_\d+$")
+        for column in list(candidates):
+            if from_target.search(column) and not past.search(column):
+                candidates.remove(column)
+                named_after_target.append(
+                    {
+                        "feature": column,
+                        "explains": None,
+                        "measure": f"named after the target {target}",
+                    }
+                )
+                dropped.append(
+                    {
+                        "feature": column,
+                        "stage": "leakage",
+                        "reason": f"built from or named after the target {target}; only its past values (lags) are known at prediction time",
+                    }
+                )
 
     screened = screen_features(rows, candidates, max_missing_rate=max_missing_rate)
     for entry in screened:
@@ -1053,7 +1201,7 @@ def select_features(
         rows, target, usable, method=method, task=task, max_rows=max_rows, options=options
     )
     scored = [entry for entry in ranking if entry.get("score") is not None]
-    leaking: list[dict[str, Any]] = []
+    leaking: list[dict[str, Any]] = list(named_after_target)
 
     for entry in ranking:
         if entry.get("score") is not None:
@@ -1094,10 +1242,34 @@ def select_features(
                 {
                     "feature": entry["feature"],
                     "stage": "leakage",
-                    "reason": f"explains {suspect['explains']:.4f} of the target, at or above the "
-                    f"leakage bar of {leakage_score}",
+                    "reason": f"explains {suspect['explains']:.4f} of the target ({suspect['measure']}), at or above the "
+                    f"leakage bar",
                 }
             )
+
+    # A feature built from a leaking column (`amount_per_chargeback_amount`,
+    # `chargeback_amount_log1p`) carries the leak with it, whatever its own score says. The builders
+    # name what they make after what they read, so the name is the record of where a feature came
+    # from.
+    for source in [entry["feature"] for entry in leaking]:
+        pattern = re.compile(rf"(^|_){re.escape(source)}(_|$)")
+        for entry in list(scored):
+            if entry["feature"] != source and pattern.search(entry["feature"]):
+                scored.remove(entry)
+                leaking.append(
+                    {
+                        "feature": entry["feature"],
+                        "explains": None,
+                        "measure": f"built from {source}, which leaks the target",
+                    }
+                )
+                dropped.append(
+                    {
+                        "feature": entry["feature"],
+                        "stage": "leakage",
+                        "reason": f"built from {source}, which leaks the target",
+                    }
+                )
 
     redundant: list[dict[str, Any]] = []
     if max_correlation is not None and len(scored) > 1:
@@ -1121,6 +1293,27 @@ def select_features(
                     "reason": f"{pair['measure']} {pair['association']} with {stronger}, which ranked higher",
                 }
             )
+
+    if drop_noise and len(scored) > 1:
+        floor = noise_floor(
+            rows,
+            target,
+            [entry["feature"] for entry in scored],
+            method=method,
+            task=task,
+            max_rows=max_rows,
+            options=options,
+        )
+        for entry in scored:
+            if floor and entry["score"] <= floor:
+                dropped.append(
+                    {
+                        "feature": entry["feature"],
+                        "stage": "noise",
+                        "reason": f"scored {entry['score']:.4f}, no better than against a shuffled target ({floor:.4f})",
+                    }
+                )
+        scored = [entry for entry in scored if not floor or entry["score"] > floor]
 
     if min_score is not None:
         for entry in scored:
@@ -1178,6 +1371,7 @@ def feature_selection_caller(
     options: dict[str, Any] | None = None,
     output_path: str | None = None,
     limit: int = 3,
+    drop_noise: bool = False,
 ) -> dict[str, Any]:
     """Rank the features against the target, drop what cannot be used, and write out what is left.
 
@@ -1199,6 +1393,8 @@ def feature_selection_caller(
         options: Extra arguments for the ranking method, e.g. `{"trees": 500}`.
         output_path: Where to write the selected columns. Defaults to a file beside the input.
         limit: How many sample rows to return.
+        drop_noise: Also drop features that score no better than against a shuffled target — worth turning on for a wide table, where some
+            columns will always look related to the target by chance.
 
     Returns:
         The selected features, the full ranking, what was dropped at each stage and why, where the
@@ -1234,6 +1430,7 @@ def feature_selection_caller(
             max_correlation=max_correlation,
             leakage_score=leakage_score,
             options=options,
+            drop_noise=drop_noise,
         )
 
         carried = [column for column in _as_columns(keep_columns) if column in column_names(rows)]
@@ -1425,7 +1622,15 @@ def _entropy(labels: Sequence[str]) -> float:
 
 
 def _mutual_information(left: Sequence[str], right: Sequence[str]) -> float:
-    """Mutual information between two discrete columns, in bits."""
+    """Mutual information between two discrete columns, in bits, less the information a column of this many levels would show by chance.
+
+    Counting how often each pair of levels occurs always finds some relationship: a column of forty
+    random categories over a thousand rows "explains" about 0.02 bits of a coin flip, enough to
+    outrank a real signal. The Miller-Madow correction subtracts what is expected from chance alone,
+    `(levels of the feature - 1) * (levels of the target - 1) / (2 * rows * ln 2)` bits, so noise
+    scores about zero however many levels it has and a column that really carries information keeps
+    most of its score.
+    """
     total = len(left)
     if not total:
         return 0.0
@@ -1439,7 +1644,8 @@ def _mutual_information(left: Sequence[str], right: Sequence[str]) -> float:
         expected = (left_counts[a] / total) * (right_counts[b] / total)
         if joint_probability and expected:
             information += joint_probability * math.log2(joint_probability / expected)
-    return max(0.0, information)
+    chance = (len(left_counts) - 1) * (len(right_counts) - 1) / (2 * total * math.log(2))
+    return max(0.0, information - chance)
 
 
 def _groups(values: Sequence[float | None], labels: Sequence[str]) -> list[list[float]]:
@@ -1602,6 +1808,35 @@ def _bin_label(number: float | None, edges: Sequence[float]) -> str:
     if number is None:
         return "missing"
     return f"bin_{sum(1 for edge in edges if number > edge)}"
+
+
+ID_NAME = re.compile(
+    r"(^|_)(id|uuid|guid|hash|key|ref|reference|number|no|num|serial|token|code)(_|$)",
+    re.IGNORECASE,
+)
+# PassengerId, customerID, orderKey
+CAMEL_ID_NAME = re.compile(r"(?<=[a-z0-9])(Id|ID|Key|Uuid|UUID|Guid|GUID|Hash|Ref|Serial|Token)$")
+
+
+def _is_identifier(column: str, kind: str | None, present: Sequence[Any]) -> bool:
+    """Whether a column whose values are nearly all distinct is an identifier, rather than a measurement that happens to rarely repeat.
+
+    Text that never repeats is an identifier. A number that never repeats is one only when it is
+    named like one (`customer_id`, `order_no`) or counts up in even steps (a row number, a
+    sequence); a household income or a transaction amount is a measurement with a long tail, and
+    every one of its values being distinct is what a continuous column looks like.
+    """
+    if kind != "numeric":
+        return True
+    if ID_NAME.search(column) or CAMEL_ID_NAME.search(column):
+        return True
+    numbers = sorted(
+        number for number in (_as_float(value) for value in present) if number is not None
+    )
+    if len(numbers) < 3 or any(number != int(number) for number in numbers):
+        return False
+    steps = Counter(round(b - a, 9) for a, b in zip(numbers, numbers[1:]))
+    return steps.most_common(1)[0][1] / (len(numbers) - 1) >= 0.9
 
 
 def _sampled(rows: Table, max_rows: int) -> Table:

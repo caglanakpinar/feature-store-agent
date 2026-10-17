@@ -126,10 +126,12 @@ LLM_PROVIDERS = [
     "hf",
     "huggingface_local",
     "hf_local",
+    "layer_lora",
+    "hf_layer_lora",
 ]
 
 # Providers that run the model in-process: a public Hub repo needs no token, so `api_key` may be empty.
-KEYLESS_PROVIDERS = {"huggingface_local", "hf_local"}
+KEYLESS_PROVIDERS = {"huggingface_local", "hf_local", "layer_lora", "hf_layer_lora"}
 
 LLM_TYPES = ["generator", "judger", "retriever", "tool caller", "tool generator"]
 
@@ -695,6 +697,16 @@ def config_detail(name: str) -> dict[str, Any]:
             "text_dbs": document.db_names("text"),
             "llm_fields": LLM_FIELDS,
             "agent_fields": AGENT_FIELDS,
+            # Agents the other configs define: a dependency can cross a file (the console's code generator
+            # reads all eight pipeline agents), so the form must be able to offer them and keep them.
+            "other_agents": sorted(
+                {
+                    agent
+                    for other in CONFIGS
+                    if other != name
+                    for agent in _document(other).block("agents")
+                }
+            ),
         },
         "referenced_agents": document.referenced_agents(),
     }
@@ -1284,7 +1296,11 @@ function agentSection() {
   const llmNames = state.llms.map(llm => llm.name).filter(Boolean);
 
   const cards = state.agents.map((card, index) => {
-    const others = state.agents.map(a => a.name).filter(n => n && n !== card.name);
+    // Another agent of this file, one of the other configs' (a dependency can cross a file), or one
+    // already named here: saving must never drop a dependency just because the form cannot list it.
+    const kept = typeof card.dependency_agent === "string" ? [card.dependency_agent] : (card.dependency_agent || []);
+    const others = [...new Set([...state.agents.map(a => a.name).filter(n => n && n !== card.name),
+      ...(detail.available.other_agents || []), ...kept])].filter(n => n !== card.name);
     const pathRow = el("div", { className: "with-button" });
     const pathInput = el("input", { value: card.prompt_path || "",
       placeholder: "prompts/data_reader.md" });
