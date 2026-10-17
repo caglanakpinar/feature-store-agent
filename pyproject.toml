@@ -70,6 +70,9 @@ scikit-learn = { version = ">=1.3", optional = true }
 # the scikit-learn scorers reach it, which is why it sits in the same extra rather than in the
 # required dependencies.
 numpy = { version = ">=1.24", optional = true }
+# What `benchmarks/` needs beyond the above: it generates its datasets and judges a feature table with a fitted model (`benchmarks/evalkit.py`).
+pandas = { version = ">=2.1", optional = true }
+scipy = { version = ">=1.11", optional = true }
 click = "^8.4.2"
 
 # Imported at module level by `console/web_search.py` for the async DuckDuckGo client, so
@@ -85,7 +88,8 @@ files = ["pyarrow", "openpyxl"]                 # poetry install -E files
 # raises when it is missing, and the catalogue `list_feature_selection_methods_caller` returns — so
 # the name has to stay `selection` for those instructions to work.
 selection = ["scikit-learn", "numpy"]           # poetry install -E selection
-all = ["pyarrow", "openpyxl", "scikit-learn", "numpy"]
+benchmarks = ["pandas", "scikit-learn", "scipy", "numpy"]   # poetry install -E benchmarks
+all = ["pyarrow", "openpyxl", "scikit-learn", "numpy", "pandas", "scipy"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
