@@ -26,6 +26,16 @@ Once the gate passes, every agent in the two stages runs in dependency order. Af
   not quality, so there's no approve/reject: you're asked directly for what it needs, and it retries
   with your answer folded into context.
 
+A small model may not call its tools at all. Handed an agent's own prompt (two to three thousand
+tokens), the 0.5B model this repo is benchmarked with made no call in 36 of 36 turns. So a small local
+model gets a **tool turn** ([`console/tool_turn.py`](console/tool_turn.py)): one sentence naming the
+table, and only that stage's tools, in short form. It then called a tool in 122 of 126 turns, and the
+console reads, checks and repairs the call. When an agent's model still makes no call that ran, the
+console runs that stage's **default calls** itself ([`console/playbook.py`](console/playbook.py)) —
+the calls a careful person would make there, with arguments read from what the earlier stages
+actually found — and the text handed to the next agent is built from what those tools returned, never
+from what the model said they returned. See [Benchmarks](#benchmarks) for what that changed.
+
 ## Pipeline
 
 | Stage | Agents | What they do |
@@ -91,10 +101,14 @@ console/                        the orchestration layer — chat, the requiremen
   agentic.py                    ChatAgent, RequirementAgent, CodeGeneratorAgent
   code_tracker.py               CodeTracker — records every tool call a run actually makes, and can
                                 render it as a prompt trace or as scripts/main.py on its own
+  gate.py                       the requirements gate read by rules (problem + a reachable data source)
+  tool_turn.py                  the short turn a small local model gets: one sentence, the stage's tools in
+                                short form, its calls read, checked and counted
+  playbook.py                   each agent's default tool calls, for when its model makes none
   config_ui.py                  the `cli.py configure` editor — a local page that rewrites the
                                 llms: and agents: blocks of the three configs below in place
   web_search.py                 cached DuckDuckGo search, used on a rejection
-  prompts/                      chat.md, requirements.md, not_approved.md, code_generator.md
+  prompts/                      chat.md, requirements.md, not_approved.md, code_generator.md, tool_turns.md
 
 data_engineer/                  reads, analyses, cleans and quality-checks a dataset
 feature_engineering/            frames the problem, imputes, builds and selects features
@@ -103,6 +117,10 @@ feature_engineering/            frames the problem, imputes, builds and selects 
   prompts/                      one .md file per agent, documenting its tools and its output contract
   agentic_configurations.yaml   llms:, agents:, tools:, orchestrators:, pipeline: — the whole config
 
+benchmarks/                     18 seeded data problems with planted traps, a runner and a scorer;
+                                RESULTS.md (what they found), SCORES.md (per case), evidence/ (probe logs)
+tests/                          pytest: tools, analyzer, gate, playbook, tool turn, routing, and the
+                                benchmark cases themselves
 data/                           wherever you point a run's data at (not version controlled)
 scripts/main.py                 written at the end of an approved run — the run as a plain script
                                 (also not version controlled; every run overwrites it)
@@ -124,8 +142,11 @@ FeatureSelector.run(question="select the features worth keeping", agent_outputs=
 poetry install
 ```
 
-Every LLM in this repo currently runs on Gemini (`gemini-3.1-flash-lite`), configured under `llms:` in
-each of the three configs below, so out of the box you need:
+Every `llms:` entry in the three configs below currently points at the local model
+`hf_layer_lora/Caglana/qwen0.5b-tinylora-ds-assistant` (see [Running a small local model](#running-a-small-local-model)),
+which is what the [benchmarks](#benchmarks) were run with. To run on a hosted model instead, change the
+entry's `model:` and `api_key:` — the earlier setup used Gemini (`gemini/gemini-3.1-flash-lite`,
+`api_key: GEMINI`) — and export the key:
 
 ```bash
 export GEMINI=<your Gemini API key>
@@ -146,6 +167,7 @@ a caller for:
 | Mistral | `mistral/` | ✅ |
 | Hugging Face Inference | `huggingface/` or `hf/` | ✅ |
 | Hugging Face (local, `transformers`) | `hf_local/` or `huggingface_local/` — `api_key` optional for public repos | ❌ |
+| Hugging Face LoRA adapter (local) | `hf_layer_lora/` — e.g. `hf_layer_lora/Caglana/qwen0.5b-tinylora-ds-assistant` | ✅ (its own loop, see below) |
 | Google (Gemini) | `google/` or `gemini/` | ❌ — see below |
 
 Every `llms:` block lives in one of these three files — update whichever agents you want on a
@@ -158,13 +180,57 @@ different model, either by hand or through [`cli.py configure`](#editing-the-con
 - [`feature_engineering/agentic_configurations.yaml`](feature_engineering/agentic_configurations.yaml)
   — `problem_analyzer_agent`, `missing_value_agent`, `feature_prep_agent`, `feature_selection_agent`
 
-Then export whatever `api_key:` names for the entries you changed — `CLAUDE`, `OPENAI`, `MISTRAL`,
-however you name the variable — alongside or instead of `GEMINI`.
+Then export whatever `api_key:` names for the entries you changed — `GEMINI`, `CLAUDE`, `OPENAI`,
+`MISTRAL`, however you name the variable.
 
 Gemini and local Hugging Face have no native tool-calling in `agent-builder`, so tool-bearing agents on
 a `google`/`gemini` or `hf_local` entry run through a manual prompted tool loop instead (`console/run.py`'s `run_with_prompted_tools`) —
 real tool execution, just driven by a `TOOL_CALL: {...}` text convention rather than the provider's own
 function-calling API. Every other provider in the table above gets the native round trip for free.
+
+### Running a small local model
+
+`hf_layer_lora/…` needs an `agent-builder` that has that provider: the one `poetry install` pins is older,
+so run with a checkout beside this repo on the path (`PYTHONPATH=../agent_builder:. python cli.py generate`),
+and do not set `HF_HUB_OFFLINE=1` — the loader asks the Hub whether the repo is an adapter, even with the
+weights cached.
+
+**Use the tool-calling revision.** `Caglana/qwen0.5b-tinylora-ds-assistant` has a build trained to call
+tools in Qwen's native `<tool_call>` format, `v6-layer-lora-14250-tools`; `main` is the one before it and
+asks questions back instead. The `hf_layer_lora` entries of `data_engineer/` and `feature_engineering/`, whose
+agents call tools, pin it:
+
+```yaml
+llms:
+  generator_llm_1:
+    model: "hf_layer_lora/Caglana/qwen0.5b-tinylora-ds-assistant"
+    settings:
+      revision: "v6-layer-lora-14250-tools"
+```
+
+The console's own entries stay on `revision: "main"`: its agents chat and answer in JSON, and the
+tool-calling build is worse at both (`benchmarks/RESULTS.md`). The price is a second adapter loaded per session;
+set the console's entries to the tool-calling revision as well if start-up time matters more than the chat replies.
+
+**Give a small model a short turn.** Pinned alone, that build still made no call when handed an agent's
+own prompt (two to three thousand tokens). A *tool turn* (`console/tool_turn.py`, the sentences in
+[`console/prompts/tool_turns.md`](console/prompts/tool_turns.md)) asks for a stage in one sentence and
+offers only that stage's tools, each cut to a path and, where there is one, a target. The console uses it
+by default for a model run in this process (`--tool-turns auto|on|off`), and keeps each agent's own
+prompt and full tools for every other model. The model chooses the tool; the stage's calls take their
+arguments from what the earlier stages found, because a small model invents column names and mangles
+long paths. With `--no-playbook` the model's own call runs instead, once its path and target are put
+right and what the tool does not take is dropped. In the benchmark the model chose the expected tool in
+125 of 126 turns, but the pipeline it then drives is weaker than the playbook's (88 of 120 checks against
+116): choosing a tool is not the same as knowing which columns leak.
+
+Each model turn is also cut at `MODEL_TURN_TOKENS` (500) unless the agent's own `max_tokens` is lower
+(these configs say 16000, which a small model that does not stop would spend on every turn).
+
+Where a stage is still not done after its model's turn, the console runs the stage's default calls
+([`console/playbook.py`](console/playbook.py)), takes the text handed to the next agent from what those
+tools returned, and stops offering the model a turn after two agents in a row where it called nothing.
+[`benchmarks/RESULTS.md`](benchmarks/RESULTS.md) has the numbers.
 
 Some readers need extra dependencies:
 
@@ -207,6 +273,21 @@ Then, with nothing agentic involved at all:
 poetry run python scripts/main.py
 ```
 
+### Running unattended
+
+```bash
+poetry run feature-store-agent generate --yes \
+  --message "Predict churn (the column churned). The data is in data/churn.csv." \
+  --run-dir runs/churn
+```
+
+`--message` is the first thing the user says; `--yes` approves every agent and answers an agent's question
+from what the run already knows (nobody is there to ask); `--run-dir` leaves `run.json` — every agent's
+output and every tool call with its arguments and what it returned — and `main.py` there instead of
+`scripts/main.py`. Exit status is 1 if the pipeline did not finish. `--no-playbook` turns the default
+calls off, to see what the model does on its own; `--tool-turns auto|on|off` chooses between the short
+tool turn and each agent's own prompt.
+
 ### Editing the configs in a browser
 
 ```bash
@@ -246,6 +327,10 @@ registers, `llm` and `substitute_llm` are picked from the LLMs above, and `depen
 chosen with *Browse…***, which opens a file picker over this repository — the path is written
 relative to that config's own directory, which is where `agent-builder` resolves it from.
 
+`dependency_agent` offers the agents of the other two configs as well as this file's own — the console's
+`code_generator_agent` reads all eight pipeline agents, which live elsewhere — and keeps a dependency the
+file already has even if it is not on offer. `hf_layer_lora` is a recognised provider.
+
 Anything the form has no box for (`responsiblity_prompt`, `mcp_servers`, a `thresholds:` block) is
 kept in a small YAML box on the entry, so nothing already in the file is dropped by saving.
 
@@ -258,32 +343,88 @@ is refused with the reason and **nothing is written**. Things that are odd but s
 `prompt_path` pointing at a file that doesn't exist yet, an agent removed while `pipeline:` still
 names it — are saved and reported as warnings.
 
+## Benchmarks
+
+[`benchmarks/`](benchmarks/) holds 18 seeded data problems — churn, house prices, card fraud, demand,
+click-through, claims, energy, readmission, ride ETA and others — each with the problem stated the way
+a person would state it, the traps planted in its data, and a hand-built reference solution. The traps
+are what real exports have: columns known only after the outcome, `-999` placeholders, `1,850 sqft` and
+`$250` written as text, repeated rows, renamed columns, near-copies, a GPS `(0, 0)`. A run is scored on
+the table it leaves behind, never on what an agent said: how many of 120 checks it got past, and whether
+a model trained on its features does better *at serving time* — after-the-outcome columns blanked on
+held-out rows — than one trained on the raw columns.
+
+```bash
+python -m benchmarks.run verify           # each reference passes: the traps are real, the bars reachable
+python -m benchmarks.run score all        # the playbook alone, no model (about 4 minutes)
+python -m benchmarks.run chat c04         # the whole console with the local model, unattended, then scored
+python -m benchmarks.run chat all --no-playbook --label calls-only   # the model's own calls only
+```
+
+| What was run | Checks passed (of 120) | Beats the raw columns | Reaches the reference |
+|---|---:|---:|---:|
+| the original tools, driven by a correct default chain, no model | 72 | 10 / 18 | 4 / 18 |
+| the final tools and playbook, no model | **116** | **17 / 18** | **6 / 18** |
+| the whole console, 0.5B model with a tool turn | **116** | **17 / 18** | **6 / 18** |
+| the model's own calls only (`--no-playbook`) | 88 | 13 / 18 | 3 / 18 |
+| the model, the agents' own prompts, no playbook (3 cases) | 0 of 22 | 0 / 3 | 0 / 3 |
+
+What the runs changed, in the tools and the console ([`benchmarks/RESULTS.md`](benchmarks/RESULTS.md) has
+the evidence for each):
+
+- **Tools.** Leak detection (a column that alone ranks the target, is filled in only when the outcome
+  happened, or is built from a suspect: 5 of 29 leaks caught, now 26), placeholders and numbers written
+  as text, entity detection for history features, a distance between coordinate pairs, a renamed
+  column merged back. Tools that build features or fill holes now take a `target` and set it aside, so
+  nothing is built from the answer; `data_prep_tool` writes `<source>__prepared.csv` beside its input and
+  by default leaves the holes for the missing-value stage.
+- **Console.** A requirements gate read by rules (the model's own verdict named the data file in 4 of 18
+  messages), the tool turn and the playbook above, and a cap on a model turn (a single uncapped turn ran
+  past nine minutes). A case now takes about 31 s with the model on one adapter, from 257 s.
+- **Agent wiring.** Feature engineering now reads what data engineering found, the quality check has its
+  own prompt and reads both the analysis and the preparation, and the `configure` editor keeps
+  dependencies on agents of the other configs. `tests/test_routing.py` pins all of it.
+
+Read the numbers with these in mind: the thresholds and the tool-turn sentences were set while looking at
+these 18 cases, so 116 of 120 is in-sample; four checks are still missed for reasons the results file
+explains; the model's calls are real but narrow (an agent is offered one or two tools, and the expected
+one is the only sensible choice at most of them); and the playbook is not an upper bound — on two cases
+the model's own table scored higher.
+
 ## Known limitations
 
 - **Gemini can't run tools natively** in `agent-builder` — see the prompted-tool-loop note above. It
   works, but is a text convention rather than the provider's own protocol, and a model can occasionally
   fail to follow it.
-- **The two stages aren't wired together via `agent_outputs`.** `feature_engineering`'s first agent has
-  no `dependency_agent`, so it only ever sees the raw conversation (`{context}`), not
-  `data_engineer`'s actual output — both stages point at the same original source rather than feature
-  engineering building on data engineering's cleaned result.
-- **Only the prompted-tool loop is tracked.** `CodeTracker` sees a call by being handed it inside
-  `run_with_prompted_tools`, so a natively tool-calling provider (Claude, OpenAI, …) records nothing —
-  the run finishes normally, but ends with "no tool calls were recorded" and no `scripts/main.py`. It's
-  the same limitation `with_known_data_path` has, for the same reason: that path executes tools inside
-  `agent-builder`, with no hook to observe them through.
-- **`chat_agent` and `requirement_agent` declare `dependencies:`**, a field `AgentConfigs` doesn't have,
-  so it's silently dropped and their `{agent_output}` renders empty. `code_generator_agent` uses the real
-  field, `dependency_agent:`, which is how it can read all eight stages' outputs.
+- **The two stages are wired through `agent_outputs`.** `problem_analyzer_agent` depends on
+  `data_quality_agent` (an agent of the other config; the console keeps every agent's output in one
+  dict), and `data_quality_agent` on both `data_analyzer_agent` and `data_preprocessor_agent`. The
+  working table itself travels as `Current data path:`. `tests/test_routing.py` pins who reads whom.
+- **Tool calls are tracked for both tool loops.** `agent-builder` runs a natively tool-calling provider's
+  loop itself, with no hook for `CodeTracker`; `console.run.recorded_calls` wraps the agent's toolbox
+  for the length of its turn, so those calls are recorded (and get their data path filled in) the same
+  way the prompted loop's do. A call that comes back `status: error` is a failure in `run.json`, not a
+  step of `scripts/main.py`.
+- **`{human_feedback}` and `{target}` are placeholders `agent-builder` has no way to fill** for the data
+  and feature prompts that declare them, so those sections render empty; the target and any human answer
+  reach an agent through `{context}`.
+- **A rejection of a playbook-run stage changes nothing.** Its calls are deterministic, so "go deeper"
+  repeats the same text; the web search it triggers is only read by an agent that runs its own prompt.
+- **A small model chooses tools; it does not plan.** Without the playbook the 0.5B model gets 88 of 120
+  checks: it picks the expected tool but never drops a leak the analysis names, and a stage it makes no
+  call at (the selection step in one case) is simply skipped. A larger model on this console has not been
+  run.
 - **Some agents have no real prompt yet** (`rag_data_engineer_decider_agent`,
-  `data_engineer_pipeline_creator`, and the judger agents) — each still points at a `benchmarks/`
-  prompt directory this repo doesn't have. They're deliberately left out of `console/run.py`'s
-  `STAGES` rather than run against an empty prompt.
+  `data_engineer_pipeline_creator`, and the judger agents) — each still points at a
+  `benchmarks/prompts/` file that does not exist (the `benchmarks/` folder here is the evaluation
+  suite). They're deliberately left out of `console/run.py`'s `STAGES` rather than run against an
+  empty prompt.
 
 ## Development
 
 ```bash
-poetry run pytest
+poetry run pytest                         # 225 tests; none needs a model
 poetry run black . && poetry run isort .
 poetry run mypy .
+python -m benchmarks.run verify           # the benchmark's references still pass their own checks
 ```
