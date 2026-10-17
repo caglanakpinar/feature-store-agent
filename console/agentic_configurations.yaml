@@ -1,15 +1,27 @@
 
 llms:
   generator_llm_thinker:  # the workhorse behind the specialists
-    model: "gemini/gemini-3.1-flash-lite"
-    api_key: GEMINI
+    model: "hf_layer_lora/Caglana/qwen0.5b-tinylora-ds-assistant"
+    api_key: "HF_TOKEN"
     max_tokens: 16000
     type: "generator"
+    settings:
+      # `main`, on purpose: these agents talk (chat_agent) and answer in JSON (requirement_agent), and the tool-calling build
+      # of this adapter is worse at both -- 4 of 18 requirement verdicts parsed against 15 of 18 on `main`, and chat replies
+      # that repeat the prompt's headings. The agents that call tools are in data_engineer/ and feature_engineering/, and
+      # those two files ask for `v6-layer-lora-14250-tools`. See benchmarks/RESULTS.md.
+      revision: "main"
   generator_llm_thinker_2:  # the workhorse behind the deciders
-    model: "gemini/gemini-3.1-flash-lite"
-    api_key: GEMINI
+    model: "hf_layer_lora/Caglana/qwen0.5b-tinylora-ds-assistant"
+    api_key: "HF_TOKEN"
     max_tokens: 16000
     type: "generator"
+    settings:
+      # `main`, on purpose: these agents talk (chat_agent) and answer in JSON (requirement_agent), and the tool-calling build
+      # of this adapter is worse at both -- 4 of 18 requirement verdicts parsed against 15 of 18 on `main`, and chat replies
+      # that repeat the prompt's headings. The agents that call tools are in data_engineer/ and feature_engineering/, and
+      # those two files ask for `v6-layer-lora-14250-tools`. See benchmarks/RESULTS.md.
+      revision: "main"
 
 agents:
   chat_agent:  # the front door — no dependency_agent, `cli.py generate` is what talks to it
@@ -23,14 +35,13 @@ agents:
     llm: "generator_llm_thinker"
     substitute_llm: "generator_llm_thinker_2"
     prompt_path: "prompts/requirements.md"
-    dependencies:
-      - "chat_agent"
 
   code_generator_agent:  # runs once, after every pipeline stage is approved — see console/run.py's
-    # generate_code(). `dependency_agent` (not `dependencies:` — see `requirement_agent`'s own entry
-    # above, which uses a field `AgentConfigs` does not have and so renders no `{agent_output}` at all)
-    # lists every worker agent the pipeline runs, in order, so this agent's prompt can read what each
-    # one actually reported.
+    # generate_code(). `dependency_agent` lists every worker agent the pipeline runs, in order, so
+    # this agent's prompt can read what each one actually reported. They live in the other two configs
+    # (`data_engineer`, `feature_engineering`): a dependency can name an agent of another file, and the
+    # `configure` editor offers and keeps them. Without this list `{agent_output}` renders nothing and
+    # the script is written from the recorded calls alone.
     type: "generator"
     llm: "generator_llm_thinker"
     substitute_llm: "generator_llm_thinker_2"
