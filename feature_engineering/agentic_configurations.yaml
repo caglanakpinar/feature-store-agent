@@ -20,34 +20,59 @@
 # keeps a non-streaming request under the SDK's HTTP timeout; going much higher needs streaming.)
 llms:
   rag_llm:
-    model: "gemini/gemini-3.1-flash-lite"
-    api_key: GEMINI  # the env var holding the key, or paste the key here directly
+    model: "hf_layer_lora/Caglana/qwen0.5b-tinylora-ds-assistant"
+    api_key: "HF_TOKEN"
     max_tokens: 16000
     type: "generator"
+    settings:
+      # The tool-calling build of this adapter (`main` is the one before it, trained without tool calls and, in the benchmark,
+      # asked for a tool in 0 of 7 short prompts against 6 of 7 here). It also needs the system prompt it was trained under,
+      # which `hf_layer_lora` supplies by itself. See benchmarks/RESULTS.md.
+      revision: "v6-layer-lora-14250-tools"
 
   generator_llm_1:  # the workhorse behind the specialists
-    model: "gemini/gemini-3.1-flash-lite"
-    api_key: GEMINI
+    model: "hf_layer_lora/Caglana/qwen0.5b-tinylora-ds-assistant"
+    api_key: "HF_TOKEN"
     max_tokens: 16000
     type: "generator"
+    settings:
+      # The tool-calling build of this adapter (`main` is the one before it, trained without tool calls and, in the benchmark,
+      # asked for a tool in 0 of 7 short prompts against 6 of 7 here). It also needs the system prompt it was trained under,
+      # which `hf_layer_lora` supplies by itself. See benchmarks/RESULTS.md.
+      revision: "v6-layer-lora-14250-tools"
 
   generator_llm_2:  # for the short structured answers — still needs room to think first
-    model: "gemini/gemini-3.1-flash-lite"
-    api_key: GEMINI
+    model: "hf_layer_lora/Caglana/qwen0.5b-tinylora-ds-assistant"
+    api_key: "HF_TOKEN"
     max_tokens: 8000
     type: "generator"
+    settings:
+      # The tool-calling build of this adapter (`main` is the one before it, trained without tool calls and, in the benchmark,
+      # asked for a tool in 0 of 7 short prompts against 6 of 7 here). It also needs the system prompt it was trained under,
+      # which `hf_layer_lora` supplies by itself. See benchmarks/RESULTS.md.
+      revision: "v6-layer-lora-14250-tools"
 
   generator_llm_thinker:  # every agent's fallback when its primary call fails
-    model: "gemini/gemini-3.1-flash-lite"
-    api_key: GEMINI
+    model: "hf_layer_lora/Caglana/qwen0.5b-tinylora-ds-assistant"
+    api_key: "HF_TOKEN"
     max_tokens: 16000
     type: "generator"
+    settings:
+      # The tool-calling build of this adapter (`main` is the one before it, trained without tool calls and, in the benchmark,
+      # asked for a tool in 0 of 7 short prompts against 6 of 7 here). It also needs the system prompt it was trained under,
+      # which `hf_layer_lora` supplies by itself. See benchmarks/RESULTS.md.
+      revision: "v6-layer-lora-14250-tools"
 
   judger_agent_1:  # the review comes from a stronger model than the work it is reviewing
-    model: "gemini/gemini-3.1-flash-lite"
-    api_key: GEMINI
+    model: "hf_layer_lora/Caglana/qwen0.5b-tinylora-ds-assistant"
+    api_key: "HF_TOKEN"
     max_tokens: 16000
     type: "judger"
+    settings:
+      # The tool-calling build of this adapter (`main` is the one before it, trained without tool calls and, in the benchmark,
+      # asked for a tool in 0 of 7 short prompts against 6 of 7 here). It also needs the system prompt it was trained under,
+      # which `hf_layer_lora` supplies by itself. See benchmarks/RESULTS.md.
+      revision: "v6-layer-lora-14250-tools"
 
 
 dbs:
@@ -295,7 +320,11 @@ tools:
         required: false
       - name: "leakage_score"
         type: "float"
-        description: "The share of the target a feature may explain, 0..1, before it is treated as leakage."
+        description: "The share of the target a feature may explain, 0..1, before it is treated as leakage. A feature that ranks the target almost perfectly on its own (ROC AUC 0.95, rank correlation 0.97) is a suspect too, and so is anything built from a suspect."
+        required: false
+      - name: "drop_noise"
+        type: "bool"
+        description: "Also drop features that score no better than against a shuffled copy of the target. Turn it on for a wide table, where some columns look related to the target by chance."
         required: false
       - name: "output_path"
         type: "str"
@@ -387,6 +416,10 @@ tools:
         description: "How many sample rows to return."
         required: false
 
+      - name: "target"
+        type: "str"
+        description: "The column being predicted. Set aside before any step runs and put back unchanged, so no feature is built from it."
+        required: false
   - name: "feature_generation_tool"
     description: "Generate a whole bundle of generic features in one call, without naming individual steps — row-level, entity-level, or numeric-only."
     caller: "feature_engineering.tools.feature_prep.feature_generation_caller"
@@ -425,6 +458,10 @@ tools:
         description: "How many sample rows to return."
         required: false
 
+      - name: "target"
+        type: "str"
+        description: "The column being predicted. Set aside before any step runs and put back unchanged, so no feature is built from it."
+        required: false
   - name: "missing_report_tool"
     description: "Report what a dataset is missing and what each column needs, without changing anything: rate per column, patterns, relatedness, and a recommended method with its reason."
     caller: "feature_engineering.tools.missing.missing_report_caller"
@@ -450,6 +487,10 @@ tools:
         description: "How many missing-together combinations to report."
         required: false
 
+      - name: "target"
+        type: "str"
+        description: "The column being predicted. Reported on its own and never recommended for filling."
+        required: false
   - name: "impute_missing_tool"
     description: "Fill a dataset's missing values with one named method, writing a {column}_is_missing flag first, and report per column what was filled, with what, and how many holes remain."
     caller: "feature_engineering.tools.missing.impute_missing_caller"
@@ -501,6 +542,10 @@ tools:
         required: false
 
   # ---- models -------------------------------------------------------------------------------------
+      - name: "target"
+        type: "str"
+        description: "The column being predicted. Not filled, not used to fill another column, written back unchanged."
+        required: false
   - name: "classification_tool"
     description: "Train the binary classifier — a class-weighted logistic regression — and save it for scoring. Returns training metrics and the strongest coefficients."
     caller: "benchmarks.tools.classification_caller"
@@ -759,25 +804,28 @@ agents:
   # prompt either; they flow to the LLM call, not the template. Until `agent_builder` grows a way to
   # set them, fold the target column and any human answer into `{context}` when calling these two, or
   # that section renders unfilled.
-  problem_analyzer_agent:  # starts the run — no dependency_agent
+  problem_analyzer_agent:  # starts this stage -- it reads the data engineering stage's last report
     type: "thinker"  # switch to "rag" to retrieve from ds_knowledge_db before answering
     db_vector: "ds_knowledge_db"
     text_vector: "ds_knowledge_text_db"
     llm: "rag_llm"
     substitute_llm: "generator_llm_thinker"
     prompt_path: "prompts/problem_analyzer.md"
+    # An agent of the other config: `console.run` keeps every agent's output in one dict, so the name
+    # resolves. Without it nothing in this stage ever sees what data engineering found.
+    dependency_agent: "data_quality_agent"
 
   missing_value_agent:
     type: "generator"
-    dependency_agent: "problem_analyzer_agent"
     llm: "generator_llm_1"
     substitute_llm: "generator_llm_thinker"
     prompt_path: "prompts/missing_value_imputations.md"
+    dependency_agent: "problem_analyzer_agent"
     tools:
-      - "missing_report_tool"
-      - "impute_missing_tool"
       - "feature_prep_steps_tool"
       - "feature_prep_tool"
+      - "missing_report_tool"
+      - "impute_missing_tool"
 
   feature_prep_agent:
     type: "generator"
@@ -797,16 +845,16 @@ agents:
   # it. See `feature_selection.md`'s own header for why the split matters.
   feature_selection_agent:
     type: "generator"
-    dependency_agent:
-      - "problem_analyzer_agent"
-      - "feature_prep_agent"
     llm: "generator_llm_1"
     substitute_llm: "generator_llm_thinker"
     prompt_path: "prompts/feature_selection.md"
+    dependency_agent:
+      - "problem_analyzer_agent"
+      - "feature_prep_agent"
     tools:
-      - "feature_selection_methods_tool"
-      - "feature_screening_tool"
       - "feature_selection_tool"
+      - "feature_screening_tool"
+      - "feature_selection_methods_tool"
 
 
 orchestrators:
