@@ -92,6 +92,10 @@ DATE_FORMATS = (
     "%Y%m%d",
     "%b %d %Y",
     "%d %b %Y",
+    "%b %d, %Y",
+    "%B %d, %Y",
+    "%B %d %Y",
+    "%d %B %Y",
 )
 
 DATE_PARTS = (
@@ -679,6 +683,82 @@ def add_date_difference_features(
                 start, end = parsed[earlier][index], parsed[later][index]
                 gap = None if start is None or end is None else (end - start).total_seconds() / DAY
                 _assign(rows, index, name, gap)
+            added.append(name)
+
+    _fill(rows, added)
+    return rows, added
+
+
+LATITUDE_NAME = re.compile(r"^(?P<before>.*?)(?:latitude|lat)(?P<after>.*)$", re.IGNORECASE)
+LONGITUDE_NAME = re.compile(
+    r"^(?P<before>.*?)(?:longitude|long|lng|lon)(?P<after>.*)$", re.IGNORECASE
+)
+EARTH_DIAMETER_KM = 12742.0
+
+
+def coordinate_columns(names: Sequence[str]) -> list[tuple[str, str]]:
+    """`(latitude column, longitude column)` pairs found by name: `pickup_lat` goes with `pickup_lon`, `dropoff_latitude` with `dropoff_longitude`."""
+    longitudes = {}
+    for name in names:
+        matched = LONGITUDE_NAME.match(name)
+        if matched:
+            longitudes[(matched["before"].lower(), matched["after"].lower())] = name
+    pairs = []
+    for name in names:
+        matched = LATITUDE_NAME.match(name)
+        if matched and (matched["before"].lower(), matched["after"].lower()) in longitudes:
+            pairs.append((name, longitudes[(matched["before"].lower(), matched["after"].lower())]))
+    return pairs
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """The great-circle distance between two points, in kilometres."""
+    p = math.pi / 180
+    a = (
+        math.sin((lat2 - lat1) * p / 2) ** 2
+        + math.cos(lat1 * p) * math.cos(lat2 * p) * math.sin((lon2 - lon1) * p / 2) ** 2
+    )
+    return EARTH_DIAMETER_KM * math.asin(math.sqrt(a))
+
+
+def add_geo_distance_features(
+    rows: Table, coordinate_pairs: Sequence[Sequence[str]] = ()
+) -> tuple[Table, list[str]]:
+    """The distance in kilometres between every two coordinate pairs — pickup to drop-off, store to customer, origin to destination.
+
+    Four raw coordinates barely predict anything about a trip; the distance between the pairs does.
+    Pairs are found by name (`pickup_lat` + `pickup_lon`) unless `coordinate_pairs` lists `[latitude
+    column, longitude column]` ones. A pair that is missing, outside the globe, or exactly (0, 0) —
+    a GPS that never got a fix — gives a missing distance rather than a trip across the Atlantic.
+    """
+    pairs = [tuple(pair) for pair in coordinate_pairs if len(pair) == 2] or coordinate_columns(
+        column_names(rows)
+    )
+    added: list[str] = []
+
+    def point(row: dict[str, Any], pair: tuple[str, str]) -> tuple[float, float] | None:
+        lat, lon = to_number(row.get(pair[0])), to_number(row.get(pair[1]))
+        if lat is None or lon is None or abs(lat) > 90 or abs(lon) > 180 or (lat == 0 and lon == 0):
+            return None
+        return lat, lon
+
+    def stem(pair: tuple[str, str]) -> str:
+        matched = LATITUDE_NAME.match(pair[0])
+        return (
+            f"{matched['before']}{matched['after']}".strip("_") if matched else pair[0]
+        ) or "point"
+
+    for position, first in enumerate(pairs):
+        for second in pairs[position + 1 :]:
+            name = f"{stem(first)}_to_{stem(second)}_km"
+            for index, row in enumerate(rows):
+                a, b = point(row, first), point(row, second)
+                _assign(
+                    rows,
+                    index,
+                    name,
+                    None if a is None or b is None else round(haversine_km(*a, *b), 4),
+                )
             added.append(name)
 
     _fill(rows, added)
@@ -1783,6 +1863,7 @@ FEATURE_PREP_STEPS: dict[str, Callable[..., tuple[Table, list[str]]]] = {
     "cyclical_dates": add_cyclical_date_features,
     "recency": add_recency_features,
     "date_differences": add_date_difference_features,
+    "geo_distance": add_geo_distance_features,
     "group_aggregates": add_group_aggregate_features,
     "group_relative": add_group_relative_features,
     "lags": add_lag_features,
@@ -1914,6 +1995,27 @@ def run_steps(
 # --------------------------------------------------------------------------------------------------
 # agent-facing callers
 # --------------------------------------------------------------------------------------------------
+def set_aside(rows: Table, target: str | None) -> list[Any] | None:
+    """Take the target column out of `rows`, so that nothing built from the table can read it, and return its values.
+
+    Several steps summarise a row across all its measurements or place a value against the rest of its column
+    (`row_statistics`, the `auto_*` steps, group aggregates): handed the table with the target in it they build the answer
+    into the features, and `row_total` of a table that holds `claim_amount` is mostly `claim_amount`. A target that is not
+    in the rows is simply not set aside.
+    """
+    if not target or not rows or target not in rows[0]:
+        return None
+    return [row.pop(target, None) for row in rows]
+
+
+def put_back(rows: Table, held: list[Any] | None, target: str | None) -> Table:
+    """Give the target its column back, unchanged, once the steps are done -- when the rows are still the rows it came from."""
+    if held is not None and target and len(rows) == len(held):
+        for row, value in zip(rows, held):
+            row[target] = value
+    return rows
+
+
 def feature_prep_caller(
     data: Any = None,
     id_columns: Any = None,
@@ -1924,6 +2026,7 @@ def feature_prep_caller(
     reference_date: Any = None,
     output_path: str | None = None,
     limit: int = 3,
+    target: str | None = None,
 ) -> dict[str, Any]:
     """Run feature preparation steps over a dataset and report what was built.
 
@@ -1938,6 +2041,8 @@ def feature_prep_caller(
         reference_date: The "now" that recency and window features are measured from.
         output_path: Where to write the prepared dataset. Defaults to a file beside the input.
         limit: How many sample rows to return.
+        target: The column being predicted. It is taken out of the rows before any step runs and put back unchanged
+            afterwards, so no feature is built from it; leave it out only when the table has no target.
 
     Returns:
         The resolved columns, one entry per step with the features it added, where the data was
@@ -1948,6 +2053,10 @@ def feature_prep_caller(
         if not rows:
             return {"status": "error", "message": "the dataset is empty"}
 
+        held = None
+        if target:
+            rows = [dict(row) for row in rows]
+            held = set_aside(rows, target)
         columns = infer_columns(rows, id_columns, date_columns, aggregation_columns)
         wanted = _as_columns(steps) or list(DEFAULT_STEPS)
         before = set(column_names(rows))
@@ -1955,6 +2064,8 @@ def feature_prep_caller(
         rows, report = run_steps(rows, wanted, columns, options, reference_date)
         added = [name for name in column_names(rows) if name not in before]
         reshaped = any(step["step"] in RESHAPING_STEPS for step in report)
+        if not reshaped:
+            rows = put_back(rows, held, target)
 
         destination = output_path or _default_output_path(
             data, "entity_features" if reshaped else "features"
@@ -1988,6 +2099,7 @@ def feature_generation_caller(
     reference_date: Any = None,
     output_path: str | None = None,
     limit: int = 3,
+    target: str | None = None,
 ) -> dict[str, Any]:
     """Generate a whole bundle of generic features in one call, without naming individual steps.
 
@@ -2002,6 +2114,7 @@ def feature_generation_caller(
         reference_date: The "now" that recency and window features are measured from.
         output_path: Where to write the generated dataset. Defaults to a file beside the input.
         limit: How many sample rows to return.
+        target: The column being predicted: taken out before any feature is built and put back unchanged.
 
     Returns:
         The same envelope `feature_prep_caller` returns.
@@ -2027,6 +2140,7 @@ def feature_generation_caller(
         reference_date=reference_date,
         output_path=output_path or _default_output_path(data, f"{level}_features"),
         limit=limit,
+        target=target,
     )
 
 

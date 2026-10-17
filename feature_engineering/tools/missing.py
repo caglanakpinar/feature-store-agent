@@ -163,6 +163,8 @@ from feature_engineering.tools.feature_prep import (
     infer_columns,
     is_missing,
     load_data,
+    put_back,
+    set_aside,
     to_number,
     write_data,
 )
@@ -1201,6 +1203,7 @@ def missing_report_caller(
     id_columns: Any = None,
     date_columns: Any = None,
     patterns: int = 3,
+    target: str | None = None,
 ) -> dict[str, Any]:
     """Report what a dataset is missing and what each column needs, without changing anything.
 
@@ -1210,6 +1213,8 @@ def missing_report_caller(
         id_columns: Entity columns. Inferred from the column names when omitted.
         date_columns: Timestamp columns. Inferred from the values when omitted.
         patterns: How many missing-together combinations to report.
+        target: The column being predicted. It is reported on its own and never recommended for filling: a filled
+            target is a label nobody observed.
 
     Returns:
         The rate per column, the rows that are complete, the columns that go missing together, and a
@@ -1221,6 +1226,8 @@ def missing_report_caller(
         if not rows:
             return {"status": "error", "message": "the dataset is empty"}
 
+        rows = [dict(row) for row in rows]
+        held = set_aside(rows, target)
         resolved = infer_columns(rows, id_columns, date_columns, None)
         profile = missing_profile(rows, _as_columns(columns), patterns)
         plan = suggest_imputations(
@@ -1238,7 +1245,8 @@ def missing_report_caller(
             "missing": profile["columns"],
             "patterns": profile["patterns"],
             "recommended": plan,
-            "notes": _report_notes(profile, plan),
+            "target": _target_status(target, held),
+            "notes": [*_target_notes(target, held), *_report_notes(profile, plan)],
         }
     except Exception as error:
         logger.exception("missing_report_caller failed.")
@@ -1257,6 +1265,7 @@ def impute_missing_caller(
     options: dict[str, Any] | None = None,
     output_path: str | None = None,
     limit: int = 3,
+    target: str | None = None,
 ) -> dict[str, Any]:
     """Fill a dataset's missing values and report, per column, what was filled and with what.
 
@@ -1277,6 +1286,9 @@ def impute_missing_caller(
             `feature_columns`, `rounds`, `direction`, `limit`, `label`, `seed`, `values`.
         output_path: Where to write the imputed dataset. Defaults to a file beside the input.
         limit: How many sample rows to return.
+        target: The column being predicted. It is neither filled nor used to fill another column, and it is written
+            back unchanged: a filled target is a label nobody observed, and a column filled from the target carries
+            the answer into the features.
 
     Returns:
         Per column: its kind, how many holes it had, how many were filled and how many are left, and
@@ -1296,6 +1308,8 @@ def impute_missing_caller(
         if not rows:
             return {"status": "error", "message": "the dataset is empty"}
 
+        rows = [dict(row) for row in rows]
+        held = set_aside(rows, target)
         resolved = infer_columns(rows, id_columns, date_columns, None)
         # The plan covers every column asked about, `wanted` only the ones a method will touch: the
         # difference is the dates and the empty columns, and saying so is half of what this reports.
@@ -1334,6 +1348,7 @@ def impute_missing_caller(
         rows, added = _call(IMPUTERS[method], rows, pool)
         after = missing_counts(rows, wanted)
 
+        rows = put_back(rows, held, target)
         destination = output_path or _default_output_path(data, "imputed")
         written = write_data(rows, destination) if destination else None
 
@@ -1360,11 +1375,40 @@ def impute_missing_caller(
             "indicators_added": added,
             "output_path": written,
             "sample": _sample(rows, limit),
-            "notes": _impute_notes(method, plan, report, fills, indicators, written, destination),
+            "target": _target_status(target, held),
+            "notes": [
+                *_target_notes(target, held),
+                *_impute_notes(method, plan, report, fills, indicators, written, destination),
+            ],
         }
     except Exception as error:
         logger.exception("impute_missing_caller failed.")
         return {"status": "error", "message": str(error)}
+
+
+def _target_status(target: str | None, held: list[Any] | None) -> dict[str, Any] | None:
+    """What the target looked like when it was set aside, or None when no target was set aside."""
+    if held is None or not target:
+        return None
+    return {
+        "column": target,
+        "missing": sum(1 for value in held if is_missing(value)),
+        "rows": len(held),
+    }
+
+
+def _target_notes(target: str | None, held: list[Any] | None) -> list[str]:
+    """Say that the target was left alone, and how many rows have none -- they cannot be trained on."""
+    status = _target_status(target, held)
+    if status is None:
+        return []
+    note = f"The target {target!r} was set aside: not filled, and not used to fill anything else."
+    if status["missing"]:
+        note += (
+            f" It is missing in {status['missing']:,} of {status['rows']:,} row(s); a row with no label "
+            f"cannot be trained on, so drop those rows rather than fill them."
+        )
+    return [note]
 
 
 def _call(function: Callable[..., Any], rows: Table, pool: dict[str, Any]) -> Any:
