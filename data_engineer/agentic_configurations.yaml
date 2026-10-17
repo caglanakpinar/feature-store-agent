@@ -1,28 +1,48 @@
 
 llms:
   generator_llm_1:  # the workhorse behind the specialists
-    model: "gemini/gemini-3.1-flash-lite"
-    api_key: GEMINI
+    model: "hf_layer_lora/Caglana/qwen0.5b-tinylora-ds-assistant"
+    api_key: "HF_TOKEN"
     max_tokens: 16000
     type: "generator"
+    settings:
+      # The tool-calling build of this adapter (`main` is the one before it, trained without tool calls and, in the benchmark,
+      # asked for a tool in 0 of 7 short prompts against 6 of 7 here). It also needs the system prompt it was trained under,
+      # which `hf_layer_lora` supplies by itself. See benchmarks/RESULTS.md.
+      revision: "v6-layer-lora-14250-tools"
 
   generator_llm_2:  # for the short structured answers — still needs room to think first
-    model: "gemini/gemini-3.1-flash-lite"
-    api_key: GEMINI
+    model: "hf_layer_lora/Caglana/qwen0.5b-tinylora-ds-assistant"
+    api_key: "HF_TOKEN"
     max_tokens: 8000
     type: "generator"
+    settings:
+      # The tool-calling build of this adapter (`main` is the one before it, trained without tool calls and, in the benchmark,
+      # asked for a tool in 0 of 7 short prompts against 6 of 7 here). It also needs the system prompt it was trained under,
+      # which `hf_layer_lora` supplies by itself. See benchmarks/RESULTS.md.
+      revision: "v6-layer-lora-14250-tools"
 
   generator_llm_thinker:  # every agent's fallback when its primary call fails
-    model: "gemini/gemini-3.1-flash-lite"
-    api_key: GEMINI
+    model: "hf_layer_lora/Caglana/qwen0.5b-tinylora-ds-assistant"
+    api_key: "HF_TOKEN"
     max_tokens: 16000
     type: "generator"
+    settings:
+      # The tool-calling build of this adapter (`main` is the one before it, trained without tool calls and, in the benchmark,
+      # asked for a tool in 0 of 7 short prompts against 6 of 7 here). It also needs the system prompt it was trained under,
+      # which `hf_layer_lora` supplies by itself. See benchmarks/RESULTS.md.
+      revision: "v6-layer-lora-14250-tools"
 
   judger_agent_1:  # the review comes from a stronger model than the work it is reviewing
-    model: "gemini/gemini-3.1-flash-lite"
-    api_key: GEMINI
+    model: "hf_layer_lora/Caglana/qwen0.5b-tinylora-ds-assistant"
+    api_key: "HF_TOKEN"
     max_tokens: 16000
     type: "judger"
+    settings:
+      # The tool-calling build of this adapter (`main` is the one before it, trained without tool calls and, in the benchmark,
+      # asked for a tool in 0 of 7 short prompts against 6 of 7 here). It also needs the system prompt it was trained under,
+      # which `hf_layer_lora` supplies by itself. See benchmarks/RESULTS.md.
+      revision: "v6-layer-lora-14250-tools"
 
 
 dbs:
@@ -110,7 +130,7 @@ tools:
         required: false
       - name: "steps"
         type: "list"
-        description: "Steps to run, in order: normalize_columns, strip_whitespace, coerce_types, drop_duplicates, drop_missing_rows, fill_missing, drop_missing_columns, drop_constant_columns, drop_columns, clip_outliers, transform. Each is a step name on its own, or {step, ...its own arguments}. Defaults to the standard cleaning sequence."
+        description: "Steps to run, in order: normalize_columns, strip_whitespace, coerce_types, drop_duplicates, drop_missing_rows, fill_missing, drop_missing_columns, drop_constant_columns, drop_columns, clip_outliers, transform, replace_sentinels, merge_complementary, ordinal_scales. Each is a step name on its own, or {step, ...its own arguments}. Defaults to the cleaning that is safe on any table: strip_whitespace, coerce_types, ordinal_scales, replace_sentinels, merge_complementary, drop_duplicates, drop_constant_columns. Holes are left in on purpose; the missing-value stage flags them before it fills them."
         required: false
       - name: "options"
         type: "dict"
@@ -118,7 +138,7 @@ tools:
         required: false
       - name: "output_path"
         type: "str"
-        description: "Where to write the prepared dataset as CSV, for the next stage to read."
+        description: "Where to write the prepared dataset as CSV, for the next stage to read. Defaults to <source>__prepared.csv beside the input; an empty string writes nothing."
         required: false
       - name: "limit"
         type: "int"
@@ -219,31 +239,32 @@ agents:
 
   data_quality_agent:
     type: "generator"
-    dependency_agent: "data_preprocessor_agent"
+    # Both: it compares the analysis of the raw table with the analysis of what preparation left, so it
+    # needs what the analyzer found as well as what the preprocessor changed.
+    dependency_agent:
+      - "data_analyzer_agent"
+      - "data_preprocessor_agent"
     llm: "generator_llm_1"
     substitute_llm: "generator_llm_thinker"
-    # No dedicated data-quality prompt exists yet; analyzer.md's findings (info/warning/risk) are
-    # the closest fit this config has today — see the note on this agent in `data_engineer/agents/workers.py`.
-    prompt_path: "prompts/analyzer.md"
+    prompt_path: "prompts/data_quality.md"
     tools:
       - "data_analyzer_tool"
       - "data_analyzer_steps_tool"
 
   data_engineer_pipeline_creator:
     type: "generator"
-    dependency_agent:
-      - "data_preprocessor_agent"
-      - "data_analyzer_agent"
-      - "data_reader_agent"
     llm: "generator_llm_1"
     substitute_llm: "generator_llm_thinker"
-    # No dedicated pipeline-assembly prompt exists yet — this agent still needs one written.
     prompt_path: "benchmarks/prompts/data_engineer_prompt.md"
+    dependency_agent:
+      - "data_reader_agent"
+      - "data_analyzer_agent"
+      - "data_preprocessor_agent"
     tools:
       - "data_reader_tool"
+      - "data_prep_tool"
       - "data_analyzer_tool"
       - "data_analyzer_steps_tool"
-      - "data_prep_tool"
 
 
   # ---- judges -------------------------------------------------------------------------------------
